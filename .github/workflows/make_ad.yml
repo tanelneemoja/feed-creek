@@ -1,4 +1,31 @@
-- name: Commit and Push Results
+name: Generate Ad in Repo
+on:
+  workflow_dispatch: # The manual "Start" button
+
+# Give the robot permission to write files back to your repo
+permissions:
+  contents: write
+
+jobs:
+  build-and-save:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Libraries
+        run: pip install Pillow requests
+
+      - name: Run Generation Script
+        # Ensure your python script saves the image as 'final_ad.jpg'
+        run: python generate.py
+
+      - name: Commit and Push Results
         # This checks if a new image exists and saves it to the repo
         run: |
           git config --global user.name "GitHub Action Bot"
