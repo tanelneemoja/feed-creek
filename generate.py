@@ -26,10 +26,10 @@ LAYOUT_CONFIG = {
         {"x": 50, "y": 90, "w": 550, "h": 550, "center_y": 0.5}, 
         
         # Slot 2: Middle Right - Adjusted right and larger
-        {"x": 630, "y": 400, "w": 500, "h": 400, "center_y": 0.6}, 
+        {"x": 670, "y": 400, "w": 500, "h": 400, "center_y": 0.6}, 
         
         # Slot 3: Bottom Left - Adjusted lower and left
-        {"x": 35, "y": 880, "w": 550, "h": 280, "center_y": 0.8}
+        {"x": 50, "y": 880, "w": 550, "h": 280, "center_y": 0.8}
     ],
     "price": {
         "x": 920,   # Adjusted right
