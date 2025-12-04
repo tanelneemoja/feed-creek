@@ -23,7 +23,7 @@ LAYOUT_CONFIG = {
     "template_path": "assets/ballzy_template.png", # Ensure this file is uploaded!
     "slots": [
         # Slot 1: Top Left - Adjusted up and larger
-        {"x": 40, "y": 100, "w": 520, "h": 520, "center_y": 0.5}, 
+        {"x": 30, "y": 90, "w": 520, "h": 520, "center_y": 0.6}, 
         
         # Slot 2: Middle Right - Adjusted right and larger
         {"x": 700, "y": 430, "w": 600, "h": 400, "center_y": 0.6}, 
