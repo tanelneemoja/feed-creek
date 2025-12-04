@@ -23,17 +23,17 @@ LAYOUT_CONFIG = {
     "template_path": "assets/ballzy_template.png", # Ensure this file is uploaded!
     "slots": [
         # Slot 1: Top Left - Adjusted up and larger
-        {"x": 40, "y": 180, "w": 520, "h": 520, "center_y": 0.5}, 
+        {"x": 40, "y": 100, "w": 520, "h": 520, "center_y": 0.5}, 
         
         # Slot 2: Middle Right - Adjusted right and larger
-        {"x": 580, "y": 330, "w": 480, "h": 380, "center_y": 0.6}, 
+        {"x": 600, "y": 330, "w": 480, "h": 380, "center_y": 0.6}, 
         
         # Slot 3: Bottom Left - Adjusted lower and left
-        {"x": 30, "y": 780, "w": 620, "h": 280, "center_y": 0.8}
+        {"x": 30, "y": 8000, "w": 620, "h": 280, "center_y": 0.8}
     ],
     "price": {
-        "x": 860,   # Adjusted right
-        "y": 920,   # Adjusted lower
+        "x": 870,   # Adjusted right
+        "y": 950,   # Adjusted lower
         "color": "#0055FF", 
         "font_size": 80,
         "font_path": "assets/fonts/BallzyFont-Bold.ttf" # Ensure this file is uploaded!
