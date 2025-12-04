@@ -5,7 +5,7 @@ from io import BytesIO
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 
 # --- 1. CONFIGURATION ---
-
+ 
 # 1.1. XML Feed Source
 FEED_URL = "https://backend.ballzy.eu/et/amfeed/feed/download?id=102&file=cropink_et.xml"
 OUTPUT_DIR = "generated_ads" 
