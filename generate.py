@@ -15,7 +15,7 @@ MAX_PRODUCTS_TO_GENERATE = 9 # SET TO 3 FOR FINAL TEST! Change this to a high nu
 NAMESPACES = {
     'g': 'http://base.google.com/ns/1.0'
 }
- 
+  
 # 1.2. Figma Design Layout & Image Fitting
 # These coordinates are adjusted based on your latest feedback.
 LAYOUT_CONFIG = {
