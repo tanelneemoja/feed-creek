@@ -178,7 +178,7 @@ def process_feed(url):
             if "street shoes" in category_text or "boots" in category_text:
                 is_correct_category = True
         
-        label_element = item.find('g:custom_label_0', NAMESPACES)
+        label_element = item.find('custom_label_0', NAMESPACES)
         is_lifestyle = False
         if label_element is not None and label_element.text.strip() == "Lifestyle":
             is_lifestyle = True
