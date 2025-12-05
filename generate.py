@@ -38,6 +38,11 @@ LAYOUT_CONFIG = {
         "y": 1050,   # Adjusted lower
         "font_size": 80,
         "font_path": "assets/fonts/BallzyFont-Bold.ttf"
+     # 🟢 NEW: Rectangle Dimensions (Matches Slot 2 Width)
+        "rect_x0": 656,  # Starting X (left edge of Slot 2)
+        "rect_y0": 980,  # Starting Y (Adjusted for position below Slot 2)
+        "rect_x1": 1178, # Ending X (656 + 522 = 1178, right edge of Slot 2)
+        "rect_y1": 1180, # Ending Y (Bottom edge of canvas/price area)
     }
 }
 
@@ -80,21 +85,32 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
         except Exception as e:
             print(f"Error processing image {url} for product {product_id}: {e}")
 
-    # 3. Draw the Price
+   # 3. Draw the Price
     draw = ImageDraw.Draw(base)
     price_conf = LAYOUT_CONFIG["price"]
     
+    # 🟢 NEW: Draw the Colored Rectangle Background
+    rect_coords = [
+        (price_conf["rect_x0"], price_conf["rect_y0"]),
+        (price_conf["rect_x1"], price_conf["rect_y1"])
+    ]
+    # The 'price_color' is used as the fill color!
+    draw.rectangle(rect_coords, fill=price_color) 
+    
+    # Load Font
     try:
         font = ImageFont.truetype(price_conf["font_path"], price_conf["font_size"])
     except:
         font = ImageFont.load_default() 
 
-    # Calculate text size and position 
+    # Calculate text size and position (remains the same)
     _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
     text_x = price_conf["x"] - (w / 2)
     text_y = price_conf["y"] - (h / 2)
     
-    draw.text((text_x, text_y), price_text, fill=price_color, font=font) # Uses the dynamic color
+    # Draw the price text *over* the new rectangle.
+    # We will draw the text in WHITE for high contrast over blue/purple.
+    draw.text((text_x, text_y), price_text, fill="white", font=font)
 
     # 4. Save Final Ad
     os.makedirs(OUTPUT_DIR, exist_ok=True)
