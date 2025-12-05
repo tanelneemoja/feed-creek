@@ -28,7 +28,7 @@ LAYOUT_CONFIG = {
         {"x": 25, "y": 30, "w": 606, "h": 700, "center_y": 0.5}, 
         
         # Slot 2: Middle Right - Adjusted right and larger
-        {"x": 663, "y": 303, "w": 520, "h": 625, "center_y": 0.6}, 
+        {"x": 657, "y": 303, "w": 520, "h": 625, "center_y": 0.6}, 
         
         # Slot 3: Bottom Left - Adjusted lower and left
         {"x": 25, "y": 823, "w": 606, "h": 350, "center_y": 0.5}
