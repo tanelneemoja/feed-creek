@@ -3,7 +3,7 @@ import os
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from PIL import Image, ImageOps, ImageDraw, ImageFont
-
+import csv
 # --- 1. CONFIGURATION ---
  
 # 1.1. XML Feed Source
