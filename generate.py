@@ -282,6 +282,19 @@ def process_feed(url):
 
         formatted_display_price = format_price(display_price_element)
         
+        # --- 🟢 FIX: Image Link Extraction (Re-integrated) ---
+        image_urls = []
+        main_image = item.find('g:image_link', NAMESPACES)
+        if main_image is not None:
+            image_urls.append(main_image.text.strip())
+
+        additional_images = item.findall('g:additional_image_link', NAMESPACES)
+        # Take up to 2 additional images
+        for i, img in enumerate(additional_images):
+            if i < 2: image_urls.append(img.text.strip())
+            
+        if not image_urls: continue # Skip if no images found
+        
         # Store all elements as a dictionary for easy CSV mapping
         item_elements = {}
         for node in item:
@@ -299,7 +312,7 @@ def process_feed(url):
             'nodes': list(item) # List of original nodes for XML copy
         })
 
-        # Generate Image (Run the image creation)
+        # Generate Image (This call is now safe as image_urls is defined)
         create_ballzy_ad(image_urls, formatted_display_price, product_id, final_price_color)
         product_count += 1
 
@@ -307,7 +320,6 @@ def process_feed(url):
     if products_for_feed:
         generate_meta_feed(products_for_feed)
         generate_google_feed(products_for_feed)
-
 # --- 4. EXECUTION ---
 
 if __name__ == "__main__":
