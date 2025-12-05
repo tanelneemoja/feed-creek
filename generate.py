@@ -13,6 +13,7 @@ MAX_PRODUCTS_TO_GENERATE = 15 # SET TO 3 FOR FINAL TEST! Change this to a high n
 # 🟢 IMPORTANT: REPLACE WITH YOUR VERIFIED PUBLIC URL
 GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/testing-somecool-stuff/generated_ads" 
 META_FEED_FILENAME = "ballzy_ad_feed.xml"
+GOOGLE_FEED_FILENAME = "ballzy_google_feed.csv"
 # XML Namespaces (required for parsing Google Shopping/Meta Feed XML)
 NAMESPACES = {
     'g': 'http://base.google.com/ns/1.0'
@@ -143,6 +144,71 @@ def generate_meta_feed(processed_products):
     
     print(f"Feed saved successfully: {META_FEED_FILENAME}")
 
+def generate_google_feed(processed_products):
+    """Creates the final Google Merchant Center CSV feed."""
+    print(f"\nCreating Google CSV Feed: {GOOGLE_FEED_FILENAME}")
+
+    # Define the required Google Headers
+    HEADERS = [
+        "ID", "ID2", "Item title", "Final URL", "Image URL", "Item subtitle", 
+        "Item Description", "Item category", "Price", "Sale price", 
+        "Contextual keywords", "Item address", "Tracking template", 
+        "Custom parameter", "Final mobile URL", "Android app link", 
+        "iOS app link", "iOS app store ID", "Formatted price", "Formatted sale price"
+    ]
+
+    with open(GOOGLE_FEED_FILENAME, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=HEADERS)
+        writer.writeheader()
+
+        for product_data in processed_products:
+            # Helper to quickly find a value by its Google/Custom tag
+            def get_value(tag_name):
+                # Search nodes for the tag (handle both g: and non-g: for custom labels)
+                node = product_data['item_elements'].get(tag_name)
+                return node.text.strip() if node is not None else ''
+
+            # 1. Map Contextual Keywords
+            keywords_list = []
+            keywords_list.append(get_value('brand'))
+            keywords_list.append(get_value('color'))
+            
+            # Custom labels (g:custom_label_0 -> custom_label_0)
+            for i in range(5):
+                 keywords_list.append(get_value(f'custom_label_{i}'))
+
+            # Filter out empty strings and join with a comma
+            contextual_keywords = ','.join(filter(None, keywords_list))
+            
+            # 2. Build the Row
+            row = {
+                "ID": get_value('id'),
+                "ID2": "", # Empty
+                "Item title": get_value('title'),
+                "Final URL": get_value('link'),
+                "Image URL": f"{GITHUB_PAGES_BASE_URL}/ad_{product_data['id']}.jpg", # Our new image link
+                "Item subtitle": "", # Empty
+                "Item Description": get_value('description'),
+                "Item category": get_value('google_product_category'),
+                "Price": get_value('price'),
+                "Sale price": get_value('sale_price'), 
+                "Contextual keywords": contextual_keywords,
+                "Item address": "", # Empty
+                "Tracking template": "", # Empty
+                "Custom parameter": "", # Empty
+                "Final mobile URL": "", # Empty
+                "Android app link": "", # Empty
+                "iOS app link": "", # Empty
+                "iOS app store ID": "", # Empty
+                # Format the prices to match your previous formatting
+                "Formatted price": product_data['formatted_price'],
+                "Formatted sale price": product_data['formatted_sale_price']
+            }
+            
+            writer.writerow(row)
+            
+    print(f"CSV Feed saved successfully: {GOOGLE_FEED_FILENAME}")
+
 def process_feed(url):
     """Downloads the XML feed, filters products, generates images, and stores data."""
     
@@ -188,61 +254,59 @@ def process_feed(url):
         if not is_correct_category or not is_lifestyle:
             continue 
             
-        # --- Price Extraction and Coloring ---
+        # --- Price Extraction and Formatting ---
         sale_price_element = item.find('g:sale_price', NAMESPACES)
-        
+        price_element = item.find('g:price', NAMESPACES)
+
+        # Determine price to display and color
         if sale_price_element is not None:
-            price_element = sale_price_element
+            display_price_element = sale_price_element
             final_price_color = SALE_PRICE_COLOR
             price_state = "sale"
-        else:
-            price_element = item.find('g:price', NAMESPACES)
+        elif price_element is not None:
+            display_price_element = price_element
             final_price_color = NORMAL_PRICE_COLOR
             price_state = "normal"
-
-        if price_element is None: continue
+        else:
+            continue
             
-        # Price Formatting: Strip .00 if integer, keep decimals otherwise, and append €
-        raw_price_str = price_element.text.split()[0]
-        
-        try:
-            price_value = float(raw_price_str)
-            if price_value == int(price_value):
-                formatted_price = f"{int(price_value)}€" 
-            else:
-                formatted_price = f"{price_value:.2f}€" 
-                
-        except ValueError:
-            formatted_price = raw_price_str.replace(" EUR", "€")
+        # Helper to extract and format a price element
+        def format_price(element):
+            if element is None: return ""
+            raw_price_str = element.text.split()[0]
+            try:
+                price_value = float(raw_price_str)
+                return f"{int(price_value)}€" if price_value == int(price_value) else f"{price_value:.2f}€"
+            except ValueError:
+                return raw_price_str.replace(" EUR", "€")
 
-        # --- Image Link Extraction ---
-        image_urls = []
-        main_image = item.find('g:image_link', NAMESPACES)
-        if main_image is not None:
-            image_urls.append(main_image.text.strip())
-
-        additional_images = item.findall('g:additional_image_link', NAMESPACES)
-        for i, img in enumerate(additional_images):
-            if i < 2: image_urls.append(img.text.strip())
-
-        if not image_urls: continue
+        formatted_display_price = format_price(display_price_element)
         
-        # Generate Image (Run the image creation)
-        create_ballzy_ad(image_urls, formatted_price, product_id, final_price_color)
-        
-        # Store all original nodes and critical data for the final XML feed
+        # Store all elements as a dictionary for easy CSV mapping
+        item_elements = {}
+        for node in item:
+            # Normalize tag names for dictionary keys (remove namespace prefix)
+            tag_name = node.tag.split('}')[-1]
+            item_elements[tag_name] = node
+
+        # Store all original nodes and critical data for the final feeds
         products_for_feed.append({
             'id': product_id,
             'price_state': price_state, 
-            'nodes': list(item) 
+            'formatted_price': format_price(price_element),
+            'formatted_sale_price': format_price(sale_price_element),
+            'item_elements': item_elements, # Dictionary of nodes for easy CSV lookup
+            'nodes': list(item) # List of original nodes for XML copy
         })
 
+        # Generate Image (Run the image creation)
+        create_ballzy_ad(image_urls, formatted_display_price, product_id, final_price_color)
         product_count += 1
 
-    # FINAL STEP: Generate the Meta Feed
+    # 🟢 FINAL STEP: Generate both Feeds
     if products_for_feed:
         generate_meta_feed(products_for_feed)
-
+        generate_google_feed(products_for_feed)
 
 # --- 4. EXECUTION ---
 
