@@ -34,18 +34,17 @@ jobs:
         run: pip install Pillow requests
 
       - name: Run Generation Script
-        # This will run generate.py and create the generated_ads folder
         run: python generate.py
 
       - name: Commit and Push Results
-        # This will save the new images to the repo's generated_ads folder
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           
-          # Add the output folder
+          # Add the output folder and the new XML feed file
           git add generated_ads 
+          git add ballzy_ad_feed.xml
           
-          # Commit only if there are changes (|| prevents error if no ads were generated)
-          git commit -m "Automated ad generation run" || echo "No new ads to commit"
+          # Commit only if there are changes
+          git commit -m "Automated ad generation and feed update" || echo "No new files to commit"
           git push
