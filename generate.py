@@ -37,8 +37,8 @@ LAYOUT_CONFIG = {
         "x": 920,   # Adjusted right
         "y": 1050,   # Adjusted lower
         "font_size": 80,
-        "font_path": "assets/fonts/BallzyFont-Bold.ttf"
-     # 🟢 NEW: Rectangle Dimensions (Matches Slot 2 Width)
+        "font_path": "assets/fonts/BallzyFont-Bold.ttf",
+     # NEW: Rectangle Dimensions (Matches Slot 2 Width)
         "rect_x0": 656,  # Starting X (left edge of Slot 2)
         "rect_y0": 980,  # Starting Y (Adjusted for position below Slot 2)
         "rect_x1": 1178, # Ending X (656 + 522 = 1178, right edge of Slot 2)
