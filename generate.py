@@ -371,16 +371,16 @@ def process_single_feed(country_code, config):
             if "street shoes" in category_text or "boots" in category_text:
                 is_correct_category = True
         
-        label_element = item.find('custom_label_0', NAMESPACES)
+        label_element = item.find('custom_label_0', NAMESPACES) 
         is_lifestyle = False
         
-        # 🟢 FIX: Check that label_element is not None AND its .text attribute is not None
         if label_element is not None and label_element.text is not None: 
-            if label_element.text.strip() == "Lifestyle":
+            # Use the robust check (strip and lower()) to catch variations
+            if label_element.text.strip().lower() == "lifestyle": 
                 is_lifestyle = True
             
         if not is_correct_category or not is_lifestyle:
-            continue 
+            continue
             
         # --- Price Extraction and Formatting ---
         sale_price_element = item.find('g:sale_price', NAMESPACES)
