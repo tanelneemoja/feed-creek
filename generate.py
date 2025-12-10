@@ -155,7 +155,7 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
 
 # --- 3. XML FEED PROCESSING LOGIC ---
 
-def generate_meta_feed(processed_products):
+def generate_meta_feed(processed_products, country_code):
     # 🟢 NEW: Dynamic Filename
     META_FEED_FILENAME = f"ballzy_{country_code.lower()}_ad_feed.xml"
     
@@ -195,7 +195,7 @@ def generate_meta_feed(processed_products):
     
     print(f"Feed saved successfully: {META_FEED_FILENAME}")
 
-def generate_tiktok_feed(processed_products):
+def generate_tiktok_feed(processed_products, country_code):
      # 🟢 NEW: Dynamic Filename
     TIKTOK_FEED_FILENAME = f"ballzy_tiktok_{country_code.lower()}_ad_feed.xml"
     
@@ -264,7 +264,7 @@ def generate_tiktok_feed(processed_products):
     
     print(f"Feed saved successfully: {TIKTOK_FEED_FILENAME}")
 
-def generate_google_feed(processed_products):
+def generate_google_feed(processed_products, country_code):
      # 🟢 NEW: Dynamic Filename
     GOOGLE_FEED_FILENAME = f"ballzy_{country_code.lower()}_google_feed.csv"
     
