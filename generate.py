@@ -165,14 +165,14 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
 def create_estonian_contamination_report(xml_path):
     """
     Reads the full LT feed XML file and generates a CSV report of all products
-    whose g:description contains Estonian markers.
-
-    The report includes ID, Title, Description, and Link for tracking purposes.
-    The output file is GUARANTEED to be created with headers, even if empty.
+    whose g:description contains the STRICTEST Estonian markers (ö, ä, ü, õ).
+    
+    CRITICAL FIX: Uses the 'g:' namespace for ID, Title, Description, and Link.
     """
     # Use the NAMESPACES alias defined globally in your script
     NS = {'g': 'http://base.google.com/ns/1.0'} 
     import xml.etree.ElementTree as ET # Ensure ET is available
+    import csv # Ensure CSV is imported
 
     if not os.path.exists(xml_path):
         print(f"Error: XML file not found at {xml_path}")
@@ -180,9 +180,8 @@ def create_estonian_contamination_report(xml_path):
 
     REPORT_CSV_FILE = "LT_Estonian_Contamination_Report.csv"
     
-    # 🟢 CORE DETECTION: Estonian-specific letters and strong indicator words
-    # This list is used to check the description content only.
-    ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ', 'eesti', 'saadaval', 'vaata', 'pood', 'ning', 'kohe']
+    # 🟢 STRICT CORE DETECTION: Rely only on characters unique to Estonian
+    ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ']
     
     try:
         tree = ET.parse(xml_path)
@@ -194,35 +193,37 @@ def create_estonian_contamination_report(xml_path):
     product_elements = root.findall('./channel/item')
     contaminated_products = []
 
-    print(f"\n🔎 Starting final contamination check on {len(product_elements)} products in LT feed...")
+    print(f"\n🔎 Starting final, namespaced contamination check on {len(product_elements)} products in LT feed...")
 
     for item in product_elements:
-        # --- Data Extraction (Used for Report Columns) ---
+        # --- Data Extraction (FIXED to use NS for all report fields) ---
         product_id = item.find('g:id', NS).text if item.find('g:id', NS) is not None and item.find('g:id', NS).text else 'N/A'
-        title_node = item.find('g:title')
-        description_node = item.find('g:description', NS) 
-        link_node = item.find('g:link') 
-
-        title_text = title_node.text.strip() if title_node is not None and title_node.text else ''
-        description_text = description_node.text.strip() if description_node is not None and description_node.text else ''
-        link_text = link_node.text.strip() if link_node is not None and link_node.text else ''
         
-        # --- Contamination Check Logic (Only uses description text) ---
+        # 💡 FIX: Use NS for title and link
+        title_node = item.find('g:title', NS) 
+        link_node = item.find('g:link', NS)
+        description_node = item.find('g:description', NS) 
+
+        # Ensure text is not None before stripping
+        title_text = title_node.text.strip() if title_node is not None and title_node.text else ''
+        link_text = link_node.text.strip() if link_node is not None and link_node.text else ''
+        description_text = description_node.text.strip() if description_node is not None and description_node.text else ''
+        
+        # --- Contamination Check Logic (Strictly on Description Text) ---
         check_text = description_text.lower()
         
-        # Check for any of the Estonian markers in the description text
+        # Check for any of the strict Estonian markers in the description text
         is_contaminated = any(marker in check_text for marker in ESTONIAN_MARKERS)
 
         if is_contaminated:
             contaminated_products.append({
                 'ID': product_id,
                 'Title': title_text,
-                'Description': description_text.replace('\n', ' '), # Full contaminated description
-                'Link': link_text # Link for tracking
+                'Description': description_text.replace('\n', ' '), 
+                'Link': link_text 
             })
 
     # --- Write the Report CSV (GUARANTEED OUTPUT) ---
-    import csv # Ensure CSV is imported
     with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['ID', 'Title', 'Description', 'Link']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
