@@ -160,87 +160,80 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
     base.convert("RGB").save(output_path, format="JPEG", quality=95)
     return output_path
 
-# --- 3. CONTAMINATION REPORT LOGIC (FINALIZED) ---
-
-# --- 3. CONTAMINATION REPORT LOGIC (FINALIZED) ---
+# --- 3. CONTAMINATION REPORT LOGIC (FINALIZED and Streamlined) ---
 
 def create_estonian_contamination_report(xml_path):
     """
     Reads the full LT feed XML file and generates a CSV report of all products
-    whose title or g:description contains Estonian-specific characters or words.
-    
-    The output includes ID, Title, Description, and Link (Final URL).
+    whose g:description contains Estonian markers.
+
+    The report includes ID, Title, Description, and Link for tracking purposes.
     The output file is GUARANTEED to be created with headers, even if empty.
     """
     # Use the NAMESPACES alias defined globally in your script
     NS = {'g': 'http://base.google.com/ns/1.0'} 
-    
+    import xml.etree.ElementTree as ET # Ensure ET is available
+
     if not os.path.exists(xml_path):
         print(f"Error: XML file not found at {xml_path}")
         return
 
     REPORT_CSV_FILE = "LT_Estonian_Contamination_Report.csv"
     
-    # Estonian-specific letters and strong indicator words (case-insensitive check)
+    # 🟢 CORE DETECTION: Estonian-specific letters and strong indicator words
+    # This list is used to check the description content only.
     ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ', 'eesti', 'saadaval', 'vaata', 'pood', 'ning', 'kohe']
     
     try:
-        # We need to reload the ElementTree module here to use ET.parse
-        import xml.etree.ElementTree as ET 
         tree = ET.parse(xml_path)
         root = tree.getroot()
     except Exception as e:
         print(f"Error parsing XML file {xml_path}: {e}")
         return
 
-    # Scan ALL items, ignoring the MAX_PRODUCTS_TO_GENERATE limit
     product_elements = root.findall('./channel/item')
     contaminated_products = []
 
-    print(f"\n🔎 Starting full contamination check on {len(product_elements)} products in LT feed...")
+    print(f"\n🔎 Starting final contamination check on {len(product_elements)} products in LT feed...")
 
     for item in product_elements:
-        # Core identifiers and problem fields
+        # --- Data Extraction (Used for Report Columns) ---
         product_id = item.find('g:id', NS).text if item.find('g:id', NS) is not None and item.find('g:id', NS).text else 'N/A'
-        title_node = item.find('g:title')
-        # Check g:description as specified
+        title_node = item.find('title')
         description_node = item.find('g:description', NS) 
-        link_node = item.find('g:link')
+        link_node = item.find('link') 
 
         title_text = title_node.text.strip() if title_node is not None and title_node.text else ''
         description_text = description_node.text.strip() if description_node is not None and description_node.text else ''
         link_text = link_node.text.strip() if link_node is not None and link_node.text else ''
         
-        # Check against both title and description text
-        full_text = (title_text + ' ' + description_text).lower()
+        # --- Contamination Check Logic (Only uses description text) ---
+        check_text = description_text.lower()
         
-        # Check for any of the Estonian markers in the combined text
-        is_contaminated = any(marker in full_text for marker in ESTONIAN_MARKERS)
+        # Check for any of the Estonian markers in the description text
+        is_contaminated = any(marker in check_text for marker in ESTONIAN_MARKERS)
 
         if is_contaminated:
             contaminated_products.append({
                 'ID': product_id,
                 'Title': title_text,
-                'Description': description_text.replace('\n', ' '), # Clean up newlines for CSV readability
-                'Link': link_text
+                'Description': description_text.replace('\n', ' '), # Full contaminated description
+                'Link': link_text # Link for tracking
             })
 
     # --- Write the Report CSV (GUARANTEED OUTPUT) ---
+    import csv # Ensure CSV is imported
     with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-        # 💡 CORRECTED HEADERS (Fieldnames must match dictionary keys exactly)
         fieldnames = ['ID', 'Title', 'Description', 'Link']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
         writer.writeheader()
         
         if contaminated_products:
-            # This handles the previous ValueError by matching fieldnames to keys
             writer.writerows(contaminated_products)
             print(f"⚠️ Successfully created contamination report: {REPORT_CSV_FILE} with {len(contaminated_products)} problematic products.")
         else:
-            # File is created with only headers, satisfying the git commit requirement.
             print(f"✅ Full report check completed. No highly contaminated products found. Report file created with headers only.")
-
 
 # --- 4. FEED GENERATION LOGIC ---
 
