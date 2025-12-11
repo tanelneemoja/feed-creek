@@ -160,23 +160,23 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
     base.convert("RGB").save(output_path, format="JPEG", quality=95)
     return output_path
 
-# --- 3. CONTAMINATION REPORT LOGIC (NEW) ---
+# --- 3. CONTAMINATION REPORT LOGIC (FINALIZED) ---
 
 def create_estonian_contamination_report(xml_path):
     """
     Reads the full LT feed XML file and generates a CSV report of all products
-    whose title or description contains Estonian-specific characters.
-    This runs on the full feed, ignoring MAX_PRODUCTS_TO_GENERATE.
+    whose title or description contains Estonian-specific characters or words.
+    The output file is GUARANTEED to be created with headers, even if empty.
     """
     if not os.path.exists(xml_path):
         print(f"Error: XML file not found at {xml_path}")
         return
 
     REPORT_CSV_FILE = "LT_Estonian_Contamination_Report.csv"
-    # Estonian-specific letters for reliable detection
-    ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ']
     
-    # Parse the entire XML file
+    # Estonian-specific letters and strong indicator words (case-insensitive check)
+    ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ', 'eesti', 'saadaval', 'vaata', 'pood', 'ning', 'kohe']
+    
     try:
         tree = ET.parse(xml_path)
         root = tree.getroot()
@@ -184,15 +184,17 @@ def create_estonian_contamination_report(xml_path):
         print(f"Error parsing XML file {xml_path}: {e}")
         return
 
-    # Find all product elements. Assuming the products are under 'channel/item'
+    # Scan ALL items, ignoring the MAX_PRODUCTS_TO_GENERATE limit
     product_elements = root.findall('./channel/item')
-    
     contaminated_products = []
 
     print(f"\n🔎 Starting full contamination check on {len(product_elements)} products in LT feed...")
 
     for item in product_elements:
-        product_id = item.find('g:id', NS).text if item.find('g:id', NS) is not None and item.find('g:id', NS).text else 'N/A'
+        # Check for g:id first, fallback to standard id if necessary
+        product_id_element = item.find('g:id', NS)
+        product_id = product_id_element.text if product_id_element is not None and product_id_element.text else 'N/A'
+        
         title_node = item.find('title')
         description_node = item.find('description')
         
@@ -208,21 +210,23 @@ def create_estonian_contamination_report(xml_path):
             contaminated_products.append({
                 'ID': product_id,
                 'Title': title_text,
+                # Truncate and clean newlines for CSV readability
                 'Description_Snippet': description_text[:150].replace('\n', ' ') + '...' if len(description_text) > 150 else description_text.replace('\n', ' ')
             })
 
-    # Write the report CSV
-    if contaminated_products:
-        with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['ID', 'Title', 'Description_Snippet']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            
-            writer.writeheader()
+    # --- Write the Report CSV (GUARANTEED OUTPUT) ---
+    with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['ID', 'Title', 'Description_Snippet']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        
+        if contaminated_products:
             writer.writerows(contaminated_products)
-            
-        print(f"✅ Successfully created contamination report: {REPORT_CSV_FILE} with {len(contaminated_products)} problematic products.")
-    else:
-        print(f"✅ Full report check completed. No Estonian-contaminated products detected.")
+            print(f"⚠️ Successfully created contamination report: {REPORT_CSV_FILE} with {len(contaminated_products)} problematic products.")
+        else:
+            # File is created with only headers, satisfying the git commit requirement.
+            print(f"✅ Full report check completed. No highly contaminated products found. Report file created with headers only.")
 
 
 # --- 4. FEED GENERATION LOGIC ---
