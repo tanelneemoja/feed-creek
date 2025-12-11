@@ -199,9 +199,9 @@ def create_estonian_contamination_report(xml_path):
     for item in product_elements:
         # --- Data Extraction (Used for Report Columns) ---
         product_id = item.find('g:id', NS).text if item.find('g:id', NS) is not None and item.find('g:id', NS).text else 'N/A'
-        title_node = item.find('title')
+        title_node = item.find('g:title')
         description_node = item.find('g:description', NS) 
-        link_node = item.find('link') 
+        link_node = item.find('g:link') 
 
         title_text = title_node.text.strip() if title_node is not None and title_node.text else ''
         description_text = description_node.text.strip() if description_node is not None and description_node.text else ''
