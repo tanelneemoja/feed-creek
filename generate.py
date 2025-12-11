@@ -172,6 +172,9 @@ def create_estonian_contamination_report(xml_path):
     The output includes ID, Title, Description, and Link (Final URL).
     The output file is GUARANTEED to be created with headers, even if empty.
     """
+    # Use the NAMESPACES alias defined globally in your script
+    NS = {'g': 'http://base.google.com/ns/1.0'} 
+    
     if not os.path.exists(xml_path):
         print(f"Error: XML file not found at {xml_path}")
         return
@@ -182,9 +185,11 @@ def create_estonian_contamination_report(xml_path):
     ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ', 'eesti', 'saadaval', 'vaata', 'pood', 'ning', 'kohe']
     
     try:
+        # We need to reload the ElementTree module here to use ET.parse
+        import xml.etree.ElementTree as ET 
         tree = ET.parse(xml_path)
         root = tree.getroot()
-    except ET.ParseError as e:
+    except Exception as e:
         print(f"Error parsing XML file {xml_path}: {e}")
         return
 
@@ -198,7 +203,7 @@ def create_estonian_contamination_report(xml_path):
         # Core identifiers and problem fields
         product_id = item.find('g:id', NS).text if item.find('g:id', NS) is not None and item.find('g:id', NS).text else 'N/A'
         title_node = item.find('g:title')
-        # 💡 FIX: Check g:description as specified by the user
+        # Check g:description as specified
         description_node = item.find('g:description', NS) 
         link_node = item.find('g:link')
 
@@ -221,29 +226,15 @@ def create_estonian_contamination_report(xml_path):
             })
 
     # --- Write the Report CSV (GUARANTEED OUTPUT) ---
-  with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-        
-        # 🟢 FIX CHECK 1: Ensure fieldnames is correct and local
-        # These are the fields we are passing into the dictionary
-        fieldnames = ['ID', 'Title', 'Description', 'Link'] 
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
-        writer.writeheader()
-        
-        if contaminated_products:
-            writer.writerows(contaminated_products)
-            print(f"⚠️ Successfully created contamination report: {REPORT_CSV_FILE} with {len(contaminated_products)} problematic products.")
-        else:
-            # File is created with only headers, satisfying the git commit requirement.
-            print(f"✅ Full report check completed. No highly contaminated products found. Report file created with headers only.")
-    # --- Write the Report CSV (GUARANTEED OUTPUT) ---
     with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['ID', 'Title', 'Description_Snippet']
+        # 💡 CORRECTED HEADERS (Fieldnames must match dictionary keys exactly)
+        fieldnames = ['ID', 'Title', 'Description', 'Link']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
         writer.writeheader()
         
         if contaminated_products:
+            # This handles the previous ValueError by matching fieldnames to keys
             writer.writerows(contaminated_products)
             print(f"⚠️ Successfully created contamination report: {REPORT_CSV_FILE} with {len(contaminated_products)} problematic products.")
         else:
