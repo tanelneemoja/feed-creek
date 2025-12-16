@@ -7,21 +7,21 @@ import csv
 import re
 import html
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import hashlib # For generating unique file hashes
+import hashlib 
+import glob # 🟢 NEW IMPORT for file searching
 
 # --- 1. CONFIGURATION ---
 
 # 1.1. Feed Sources, Constants, and Country Configurations
 OUTPUT_DIR = "generated_ads"
-MAX_PRODUCTS_TO_GENERATE = 200 
+MAX_PRODUCTS_TO_GENERATE = 5000 
 TEMP_DOWNLOAD_DIR = "temp_xml_feeds" 
 
-# 🟢 REMOVED: CURRENT_TEMPLATE_VERSION will now be generated dynamically
-
 # 1.2. Figma Design Layout & Image Fitting
+# ... (LAYOUT_CONFIG remains the same) ...
 LAYOUT_CONFIG = {
     "canvas_size": (1200, 1200),
-    "template_path": "assets/ballzy_template.png", # Path used for hashing
+    "template_path": "assets/ballzy_template.png", 
     "slots": [
         {"x": 25, "y": 25, "w": 606, "h": 700, "center_y": 0.5},
         {"x": 656, "y": 305, "w": 522, "h": 624, "center_y": 0.6},
@@ -74,7 +74,7 @@ GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/testing-somecool-stuff/g
 NAMESPACES = {
     'g': 'http://base.google.com/ns/1.0'
 }
-NS = NAMESPACES # Alias
+NS = NAMESPACES 
 
 # Define color constants
 NORMAL_PRICE_COLOR = "#0055FF"
@@ -86,23 +86,20 @@ SALE_PRICE_COLOR = "#cc02d2"
 def get_template_file_hash():
     """
     Reads the template file and returns its SHA1 hash.
-    This ensures that if the template image changes, all generated
-    product hashes change, forcing a full image regeneration.
     """
     template_path = LAYOUT_CONFIG["template_path"]
     if not os.path.exists(template_path):
         print(f"WARNING: Template file not found at {template_path}. Using fixed hash 'notfound'.")
-        return "notfound" # Return a default if file is missing
+        return "notfound" 
         
     hasher = hashlib.sha1()
     try:
         with open(template_path, 'rb') as f:
             while True:
-                chunk = f.read(8192) # Read file in chunks
+                chunk = f.read(8192) 
                 if not chunk:
                     break
                 hasher.update(chunk)
-        # Return a short hash (first 8 characters)
         return hasher.hexdigest()[:8]
     except Exception as e:
         print(f"ERROR: Could not hash template file: {e}")
@@ -110,7 +107,6 @@ def get_template_file_hash():
 
 def clean_text(text):
     """Removes HTML tags and decodes HTML entities (like &hellip;) from a string."""
-    # ... (function body remains the same) ...
     if not text:
         return ""
         
@@ -122,7 +118,6 @@ def clean_text(text):
 
 def download_feed_xml(country_code, url):
     """Downloads the XML feed and saves it to a temporary directory."""
-    # ... (function body remains the same) ...
     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
     filename = f"{country_code.lower()}_feed.xml"
     file_path = os.path.join(TEMP_DOWNLOAD_DIR, filename)
@@ -146,7 +141,6 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color, data_hash)
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # NEW FILENAME LOGIC: Uses hash to ensure uniqueness based on inputs
     output_path = os.path.join(OUTPUT_DIR, f"ad_{product_id}_{data_hash}.jpg")
     
     # ROBUST CACHING CHECK: Skip generation if image with correct hash already exists
@@ -202,10 +196,34 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color, data_hash)
     base.convert("RGB").save(output_path, format="JPEG", quality=95)
     return output_path
 
-# --- 4. FEED GENERATION LOGIC ---
+def cleanup_orphaned_ads(valid_filenames_set):
+    """
+    Deletes any file in OUTPUT_DIR that is an ad image but is NOT in the 
+    set of currently generated, valid hash-based filenames.
+    """
+    print(f"\nStarting cleanup of orphaned ads in {OUTPUT_DIR}...", flush=True)
+    
+    # Search for all image files generated previously (pattern ad_*.jpg)
+    all_ad_files = glob.glob(os.path.join(OUTPUT_DIR, "ad_*.jpg"))
+    
+    deleted_count = 0
+    
+    for file_path in all_ad_files:
+        filename = os.path.basename(file_path)
+        
+        # Check if the file's exact name exists in our set of valid, up-to-date ads
+        if filename not in valid_filenames_set:
+            try:
+                os.remove(file_path)
+                deleted_count += 1
+            except Exception as e:
+                print(f"  Error deleting orphaned file {filename}: {e}", flush=True)
+                
+    print(f"Cleanup complete. Deleted {deleted_count} orphaned ad images.", flush=True)
+    
 
-# Note: All three generation functions (generate_meta_feed, generate_tiktok_feed, generate_google_feed)
-# remain correct as they use product_data['data_hash'] which is now dependent on the template hash.
+# --- 4. FEED GENERATION LOGIC ---
+# (Feed generation functions are unchanged but rely on the correct 'data_hash')
 
 def generate_meta_feed(processed_products, country_code):
     """Creates the final Meta XML feed."""
@@ -213,7 +231,6 @@ def generate_meta_feed(processed_products, country_code):
     
     print(f"\nCreating final Meta Feed for {country_code}: {META_FEED_FILENAME}")
     
-    # 1. Setup Root and Channel
     ET.register_namespace('', 'http://www.w3.org/2005/Atom')
     ET.register_namespace('g', 'http://base.google.com/ns/1.0')
     rss = ET.Element('rss', version="2.0")
@@ -225,17 +242,14 @@ def generate_meta_feed(processed_products, country_code):
     for product_data in processed_products:
         item = ET.SubElement(channel, 'item')
         
-        # 2. Append all original nodes, excluding the old image link
         for node in product_data['nodes']:
             if node.tag == '{http://base.google.com/ns/1.0}image_link':
                 continue
             item.append(node)
 
-        # 3. Add the new hash-based image link node
-        new_image_link = f"{GITHUB_PAGES_BASE_URL}/ad_{product_data['id']}_{product_data['data_hash']}.jpg"
+        new_image_link = f"{GITHUB_PAGES_BASE_URL}/ad_{product_data['id']}_{product_data['data_hash']}.jpg" 
         ET.SubElement(item, '{http://base.google.com/ns/1.0}image_link').text = new_image_link
         
-    # 5. Save the resulting XML tree to a file
     tree = ET.ElementTree(rss)
     tree.write(META_FEED_FILENAME, encoding='utf-8', xml_declaration=True)
     
@@ -247,7 +261,6 @@ def generate_tiktok_feed(processed_products, country_code):
     
     print(f"\nCreating TikTok XML Feed for {country_code}: {TIKTOK_FEED_FILENAME}")
     
-    # 1. Setup Root and Channel
     ET.register_namespace('', 'http://www.w3.org/2005/Atom')
     ET.register_namespace('g', 'http://base.google.com/ns/1.0')
     rss = ET.Element('rss', version="2.0", attrib={'xmlns:g': NAMESPACES['g']})
@@ -283,16 +296,13 @@ def generate_tiktok_feed(processed_products, country_code):
                 else:
                     ET.SubElement(item, tag_name).text = clean_text_content
         
-        # 3. Add the new hash-based image link
         new_image_link = f"{GITHUB_PAGES_BASE_URL}/ad_{product_data['id']}_{product_data['data_hash']}.jpg"
         ET.SubElement(item, '{' + NAMESPACES['g'] + '}' + 'image_link').text = new_image_link
 
-        # 4. Add additional image links (Optional but useful)
         additional_images = product_data['item_elements'].get('additional_image_link')
         if additional_images is not None and additional_images.text:
             ET.SubElement(item, '{' + NAMESPACES['g'] + '}' + 'additional_image_link').text = additional_images.text
 
-    # 5. Save the resulting XML tree to a file
     tree = ET.ElementTree(rss)
     tree.write(TIKTOK_FEED_FILENAME, encoding='utf-8', xml_declaration=True)
     
@@ -320,10 +330,8 @@ def generate_google_feed(processed_products, country_code):
             
             def get_value(tag_name):
                 node = product_data['item_elements'].get(tag_name)
-                # Check for node and text existence to prevent AttributeError
                 return node.text.strip() if node is not None and node.text is not None else ''
 
-            # 1. Map Contextual Keywords
             keywords_list = []
             keywords_list.append(get_value('brand'))
             keywords_list.append(get_value('color'))
@@ -333,7 +341,6 @@ def generate_google_feed(processed_products, country_code):
 
             contextual_keywords = ','.join(filter(None, keywords_list))
             
-            # 2. Build the Row
             row = {
                 "ID": get_value('id'),
                 "ID2": "",
@@ -342,13 +349,12 @@ def generate_google_feed(processed_products, country_code):
                 "Image URL": f"{GITHUB_PAGES_BASE_URL}/ad_{product_data['id']}_{product_data['data_hash']}.jpg",
                 "Item subtitle": "",
                 "Item Description": get_value('description'),
-                "Item category": get_value('google_product_category') or get_value('category'), # Handle g:category too
+                "Item category": get_value('google_product_category') or get_value('category'), 
                 "Price": get_value('price'),
                 "Sale price": get_value('sale_price'),
                 "Contextual keywords": contextual_keywords,
                 "Formatted price": product_data['formatted_price'],
                 "Formatted sale price": product_data['formatted_sale_price'],
-                # All other fields remain empty
                 "Item address": "", "Tracking template": "", "Custom parameter": "",
                 "Final mobile URL": "", "Android app link": "", "iOS app link": "",
                 "iOS app store ID": ""
@@ -362,11 +368,13 @@ def generate_google_feed(processed_products, country_code):
 def process_single_feed(country_code, config, xml_file_path, template_hash):
     """Downloads, processes, and generates all required feeds for a single country."""
 
-    # 🟢 LOGGING: Start time with flush=True for real-time output
     print(f"\n--- 🚀 Starting Processing for {country_code} ---", flush=True)
 
     product_count = 0
-    products_for_feed = [] # Will hold all filtered products and data
+    products_for_feed = [] 
+    
+    # 🟢 NEW: Set to store the exact filenames of currently valid images
+    valid_ad_filenames = set()
 
     print(f"Processing feed for {country_code} from local file: {xml_file_path}", flush=True)
 
@@ -389,7 +397,6 @@ def process_single_feed(country_code, config, xml_file_path, template_hash):
         if product_count >= MAX_PRODUCTS_TO_GENERATE:
             break
             
-        # ... (Filtering and Price Extraction logic) ...
         product_id_element = item.find('g:id', NAMESPACES)
         if product_id_element is None or product_id_element.text is None: continue
         product_id = product_id_element.text.strip()
@@ -474,18 +481,21 @@ def process_single_feed(country_code, config, xml_file_path, template_hash):
             if tag_name in ['description', 'title', 'link']:
                 node.text = clean_text(node.text)
 
-        # 🟢 NEW: Hashing Logic - Now includes the dynamic template_hash
+        # 🟢 Hashing Logic - Now includes the dynamic template_hash
         data_string = "|".join([
             product_id,
             raw_sale_price,
             raw_price,
             str(image_urls),
-            template_hash # 🟢 DYNAMIC TEMPLATE HASH
+            template_hash 
         ]).encode('utf-8')
         
         data_hash = hashlib.sha1(data_string).hexdigest()[:8]
         
-        # 🟢 GATHER ALL DATA FOR CONCURRENT IMAGE GENERATION
+        # 🟢 Add the final, correct filename to the set of valid files
+        valid_ad_filenames.add(f"ad_{product_id}_{data_hash}.jpg")
+
+        # GATHER ALL DATA FOR CONCURRENT IMAGE GENERATION
         products_for_feed.append({
             'id': product_id,
             'price_state': price_state,
@@ -493,35 +503,32 @@ def process_single_feed(country_code, config, xml_file_path, template_hash):
             'formatted_sale_price': format_price(sale_price_element),
             'item_elements': item_elements,
             'nodes': list(item),
-            'image_urls': image_urls[:3], # Pass only first 3
+            'image_urls': image_urls[:3], 
             'final_price_color': final_price_color, 
             'formatted_display_price': formatted_display_price,
-            'data_hash': data_hash # Store the product-specific hash
+            'data_hash': data_hash 
         })
         product_count += 1
         
     
     # ----------------------------------------------------------------------
-    # 2. CONCURRENT IMAGE GENERATION (The new, fast step)
+    # 2. CONCURRENT IMAGE GENERATION (Fastest step)
     # ----------------------------------------------------------------------
     if products_for_feed:
         print(f"Starting concurrent image generation for {product_count} products...", flush=True)
         
-        # Use a thread pool to manage concurrent creation, maxing out at 16 threads
         with ThreadPoolExecutor(max_workers=16) as executor:
             futures = []
             for product in products_for_feed:
-                # Pass necessary data to the image function
                 futures.append(executor.submit(
                     create_ballzy_ad,
                     product['image_urls'], 
                     product['formatted_display_price'], 
                     product['id'], 
                     product['final_price_color'],
-                    product['data_hash'] # The unique product state hash
+                    product['data_hash'] 
                 ))
             
-            # Monitor progress
             processed_images = 0
             for i, future in enumerate(as_completed(futures)):
                 processed_images += 1
@@ -535,23 +542,21 @@ def process_single_feed(country_code, config, xml_file_path, template_hash):
         print("Concurrent image generation complete.", flush=True)
     
     # ----------------------------------------------------------------------
-    # 3. SYNCHRONOUS FEED GENERATION (Fast)
+    # 3. SYNCHRONOUS FEED GENERATION
     # ----------------------------------------------------------------------
     if products_for_feed:
-        # 1. Meta XML
+        # Generate feeds first to ensure the final output is ready
         generate_meta_feed(products_for_feed, country_code)
-        
-        # 2. Google CSV
         if config['google_feed_required']:
             generate_google_feed(products_for_feed, country_code)
-            
-        # 3. TikTok XML
         generate_tiktok_feed(products_for_feed, country_code)
+        
+        # 🟢 NEW: CLEANUP STEP
+        cleanup_orphaned_ads(valid_ad_filenames)
         
     else:
         print(f"No products matched filtering criteria for {country_code}. No feeds generated.", flush=True)
 
-    # 🟢 LOGGING: Log end successfully
     print(f"--- ✅ Processing Finished for {country_code} ---", flush=True)
 
 
@@ -559,7 +564,7 @@ def process_all_feeds(country_configs):
     """Main entry point to iterate and process all configured countries."""
     print("Starting Multi-Country Feed Generation...", flush=True)
     
-    # 🟢 NEW: Calculate Template Hash ONCE
+    # Calculate Template Hash ONCE
     template_hash = get_template_file_hash()
     print(f"Current Template Hash: {template_hash}")
     
@@ -575,7 +580,7 @@ def process_all_feeds(country_configs):
     # --- Step 2: Process individual feeds with filtering/limits ---
     for code, config in country_configs.items():
         if code in downloaded_files:
-            # 🟢 MODIFIED: Pass the template_hash to the single feed processor
+            # Pass the template_hash to the single feed processor
             process_single_feed(code, config, downloaded_files[code], template_hash)
             print("-" * 50, flush=True)
         else:
