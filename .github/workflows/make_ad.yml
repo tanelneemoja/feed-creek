@@ -47,7 +47,6 @@ jobs:
           # 🟢 NEW: Add all generated feed files (XML and CSV)
           git add ballzy_*.xml || true
           git add ballzy_*.csv || true
-          git add LT_Estonian_Contamination_Report.csv || true
           
           # Commit only if there are changes
           git commit -m "Automated multi-country feed generation and update" || echo "No new files to commit"
