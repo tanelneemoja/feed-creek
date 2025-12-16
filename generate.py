@@ -11,7 +11,7 @@ import html
 
 # 1.1. Feed Sources, Constants, and Country Configurations
 OUTPUT_DIR = "generated_ads"
-MAX_PRODUCTS_TO_GENERATE = 50
+MAX_PRODUCTS_TO_GENERATE = 100
 TEMP_DOWNLOAD_DIR = "temp_xml_feeds" # New directory for source XML downloads
 
 # 🟢 IMPORTANT: Centralized configuration for all countries
@@ -318,47 +318,45 @@ def generate_google_feed(processed_products, country_code):
 def process_single_feed(country_code, config, xml_file_path):
     """Downloads, processes, and generates all required feeds for a single country."""
 
-    # 🟢 NEW: Log start time for this country's processing
-    print(f"\n--- 🚀 Starting Processing for {country_code} ---")
+    # 🟢 LOGGING: Start time with flush=True for real-time output
+    print(f"\n--- 🚀 Starting Processing for {country_code} ---", flush=True)
 
     # 🟢 FIX: Initialize variables at the start to prevent NameError
     product_count = 0
     products_for_feed = []
 
-    print(f"Processing feed for {country_code} from local file: {xml_file_path}")
+    print(f"Processing feed for {country_code} from local file: {xml_file_path}", flush=True)
 
     try:
         # Load from the file path provided by the main function
         tree = ET.parse(xml_file_path)
         root = tree.getroot()
     except ET.ParseError as e:
-        print(f"FATAL ERROR: Could not parse XML feed for {country_code}. {e}")
-        # 🟢 NEW: Log end on error
-        print(f"--- 🛑 Processing Finished for {country_code} (Error) ---")
+        print(f"FATAL ERROR: Could not parse XML feed for {country_code}. {e}", flush=True)
+        print(f"--- 🛑 Processing Finished for {country_code} (Error) ---", flush=True)
         return
     except FileNotFoundError:
-        print(f"FATAL ERROR: XML file not found for {country_code}.")
-        # 🟢 NEW: Log end on error
-        print(f"--- 🛑 Processing Finished for {country_code} (Error) ---")
+        print(f"FATAL ERROR: XML file not found for {country_code}.", flush=True)
+        print(f"--- 🛑 Processing Finished for {country_code} (Error) ---", flush=True)
         return
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+    
     for item in root.iter('item'):
         if product_count >= MAX_PRODUCTS_TO_GENERATE:
             break
-
+            
         product_id_element = item.find('g:id', NAMESPACES)
         if product_id_element is None or product_id_element.text is None: continue
         product_id = product_id_element.text.strip()
-
-        # --- PRODUCT FILTERING LOGIC (omitted for brevity) ---
+        
+        # --- PRODUCT FILTERING LOGIC ---
         is_correct_category = False
         category_element = None
-
+        
         # 1. Try specific Google tag
         category_element = item.find('g:google_product_category', NAMESPACES)
-
+        
         # 2. Try the general Google category tag (LV/LT/FI FIX)
         if category_element is None:
              category_element = item.find('g:category', NAMESPACES)
@@ -366,27 +364,27 @@ def process_single_feed(country_code, config, xml_file_path):
         # 3. Try the un-prefixed specific tag
         if category_element is None:
              category_element = item.find('google_product_category', NAMESPACES)
-
+             
         if category_element is not None and category_element.text is not None:
             category_text = category_element.text.strip().lower()
-
+            
             # Check for English terms
             if "street shoes" in category_text or "boots" in category_text:
                 is_correct_category = True
-
+        
         # 🟢 FIX: Use un-prefixed tag for custom_label_0 (Confirmed by client)
         label_element = item.find('custom_label_0', NAMESPACES)
         is_lifestyle = False
-
+        
         if label_element is not None and label_element.text is not None:
             # Use the robust check (strip and lower()) to catch variations
             if label_element.text.strip().lower() == "lifestyle":
                 is_lifestyle = True
-
+            
         if not is_correct_category or not is_lifestyle:
             continue
-
-        # --- Price Extraction and Formatting (omitted for brevity) ---
+            
+        # --- Price Extraction and Formatting ---
         sale_price_element = item.find('g:sale_price', NAMESPACES)
         price_element = item.find('g:price', NAMESPACES)
 
@@ -400,7 +398,7 @@ def process_single_feed(country_code, config, xml_file_path):
             price_state = "normal"
         else:
             continue
-
+            
         def format_price(element):
             if element is None or element.text is None: return ""
             raw_price_str = element.text.split()[0]
@@ -412,8 +410,8 @@ def process_single_feed(country_code, config, xml_file_path):
                 return raw_price_str.replace(" EUR", "€")
 
         formatted_display_price = format_price(display_price_element)
-
-        # --- Image Link Extraction (omitted for brevity) ---
+        
+        # --- Image Link Extraction ---
         image_urls = []
         main_image = item.find('g:image_link', NAMESPACES)
         if main_image is not None and main_image.text:
@@ -422,15 +420,15 @@ def process_single_feed(country_code, config, xml_file_path):
         additional_images = item.findall('g:additional_image_link', NAMESPACES)
         for i, img in enumerate(additional_images):
             if i < 2 and img.text: image_urls.append(img.text.strip())
-
+            
         if not image_urls: continue
-
+        
         # Store all elements as a dictionary for easy CSV mapping and clean up nodes
         item_elements = {}
         for node in item:
             tag_name = node.tag.split('}')[-1]
             item_elements[tag_name] = node
-
+            
             if tag_name in ['description', 'title', 'link']:
                 node.text = clean_text(node.text)
 
@@ -447,28 +445,29 @@ def process_single_feed(country_code, config, xml_file_path):
         image_urls_for_ad = image_urls[:3]
         create_ballzy_ad(image_urls_for_ad, formatted_display_price, product_id, final_price_color)
         product_count += 1
-
+        
     # --- Execute Feed Generation (using the country code) ---
     if products_for_feed:
         # 1. Meta XML
         generate_meta_feed(products_for_feed, country_code)
-
+        
         # 2. Google CSV
         if config['google_feed_required']:
             generate_google_feed(products_for_feed, country_code)
-
+            
         # 3. TikTok XML
         generate_tiktok_feed(products_for_feed, country_code)
-
+        
     else:
-        print(f"No products matched filtering criteria for {country_code}. No feeds generated.")
+        print(f"No products matched filtering criteria for {country_code}. No feeds generated.", flush=True)
 
-    # 🟢 NEW: Log end successfully
-    print(f"--- ✅ Processing Finished for {country_code} ---")
+    # 🟢 LOGGING: Log end successfully
+    print(f"--- ✅ Processing Finished for {country_code} ---", flush=True)
+
 
 def process_all_feeds(country_configs):
     """Main entry point to iterate and process all configured countries."""
-    print("Starting Multi-Country Feed Generation...")
+    print("Starting Multi-Country Feed Generation...", flush=True)
     
     # --- Step 1: Download all feeds first ---
     downloaded_files = {}
@@ -477,21 +476,18 @@ def process_all_feeds(country_configs):
         if file_path:
             downloaded_files[code] = file_path
     
-    print("-" * 50)
+    print("-" * 50, flush=True)
 
-    # --- Step 2: Skip Contamination Report (Removed) ---
-    # The contamination report step is no longer included here.
-    
-    # --- Step 3: Process individual feeds with filtering/limits ---
+    # --- Step 2: Process individual feeds with filtering/limits ---
     for code, config in country_configs.items():
         if code in downloaded_files:
             process_single_feed(code, config, downloaded_files[code])
-            print("-" * 50)
+            print("-" * 50, flush=True)
         else:
-            print(f"Skipping processing for {code} due to previous download error.")
-            print("-" * 50)
+            print(f"Skipping processing for {code} due to previous download error.", flush=True)
+            print("-" * 50, flush=True)
 
-    print("All Feeds Generated.")
+    print("All Feeds Generated.", flush=True)
 
 
 # --- 5. EXECUTION ---
