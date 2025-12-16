@@ -68,7 +68,7 @@ COUNTRY_CONFIGS = {
 
 
 # Public Hosting Configuration
-GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/testing-somecool-stuff/generated_ads"
+GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/feed-creek/generated_ads"
 
 # XML Namespaces
 NAMESPACES = {
