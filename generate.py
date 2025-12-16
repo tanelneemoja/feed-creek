@@ -10,8 +10,8 @@ import html
 # --- 1. CONFIGURATION ---
 
 # 1.1. Feed Sources, Constants, and Country Configurations
-OUTPUT_DIR = "generated_ads" 
-MAX_PRODUCTS_TO_GENERATE = 50 
+OUTPUT_DIR = "generated_ads"
+MAX_PRODUCTS_TO_GENERATE = 50
 TEMP_DOWNLOAD_DIR = "temp_xml_feeds" # New directory for source XML downloads
 
 # 🟢 IMPORTANT: Centralized configuration for all countries
@@ -44,36 +44,36 @@ COUNTRY_CONFIGS = {
 
 
 # Public Hosting Configuration
-GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/testing-somecool-stuff/generated_ads" 
+GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/testing-somecool-stuff/generated_ads"
 
 # XML Namespaces
 NAMESPACES = {
     'g': 'http://base.google.com/ns/1.0'
 }
-NS = NAMESPACES # Alias for cleaner use in contamination report
+NS = NAMESPACES # Alias for cleaner use
 
 # Define color constants
-NORMAL_PRICE_COLOR = "#0055FF" 
-SALE_PRICE_COLOR = "#cc02d2" 
- 
+NORMAL_PRICE_COLOR = "#0055FF"
+SALE_PRICE_COLOR = "#cc02d2"
+
 # 1.2. Figma Design Layout & Image Fitting
 LAYOUT_CONFIG = {
-    "canvas_size": (1200, 1200), 
-    "template_path": "assets/ballzy_template.png", 
+    "canvas_size": (1200, 1200),
+    "template_path": "assets/ballzy_template.png",
     "slots": [
-        {"x": 25, "y": 25, "w": 606, "h": 700, "center_y": 0.5}, 
-        {"x": 656, "y": 305, "w": 522, "h": 624, "center_y": 0.6}, 
+        {"x": 25, "y": 25, "w": 606, "h": 700, "center_y": 0.5},
+        {"x": 656, "y": 305, "w": 522, "h": 624, "center_y": 0.6},
         {"x": 25, "y": 823, "w": 606, "h": 350, "center_y": 0.5}
     ],
     "price": {
-        "x": 920, 
-        "y": 1050, 
+        "x": 920,
+        "y": 1050,
         "font_size": 80,
         "font_path": "assets/fonts/poppins.medium.ttf",
-        "rect_x0": 656, 
-        "rect_y0": 950, 
-        "rect_x1": 1178, 
-        "rect_y1": 1175, 
+        "rect_x0": 656,
+        "rect_y0": 950,
+        "rect_x1": 1178,
+        "rect_y1": 1175,
     }
 }
 
@@ -109,6 +109,7 @@ def download_feed_xml(country_code, url):
 
 def create_ballzy_ad(image_urls, price_text, product_id, price_color):
     """Generates the single stylized image based on the Ballzy layout."""
+    # 
     
     try:
         base = Image.open(LAYOUT_CONFIG["template_path"]).convert("RGBA")
@@ -136,23 +137,23 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
     # Draw the Colored Border (Outline only)
     rect_coords = [(price_conf["rect_x0"], price_conf["rect_y0"]), (price_conf["rect_x1"], price_conf["rect_y1"])]
     draw.rectangle(
-        rect_coords, 
-        fill=None, 
-        outline=price_color, 
+        rect_coords,
+        fill=None,
+        outline=price_color,
         width=5
-    ) 
+    )
     
     # Load Font
     try:
         font = ImageFont.truetype(price_conf["font_path"], price_conf["font_size"])
     except:
-        font = ImageFont.load_default() 
+        font = ImageFont.load_default()
 
     # Draw the price text (using dynamic color)
     _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
     text_x = price_conf["x"] - (w / 2)
     text_y = price_conf["y"] - (h / 2)
-    draw.text((text_x, text_y), price_text, fill=price_color, font=font) 
+    draw.text((text_x, text_y), price_text, fill=price_color, font=font)
 
     # 4. Save Final Ad
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -160,81 +161,9 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color):
     base.convert("RGB").save(output_path, format="JPEG", quality=95)
     return output_path
 
-# --- 3. CONTAMINATION REPORT LOGIC (FINALIZED and Streamlined) ---
-
-def create_estonian_contamination_report(xml_path):
-    """
-    Reads the full LT feed XML file and generates a CSV report of all products
-    whose g:description contains the STRICTEST Estonian markers (ö, ä, ü, õ).
-    
-    CRITICAL FIX: Uses the 'g:' namespace for ID, Title, Description, and Link.
-    """
-    # Use the NAMESPACES alias defined globally in your script
-    NS = {'g': 'http://base.google.com/ns/1.0'} 
-    import xml.etree.ElementTree as ET # Ensure ET is available
-    import csv # Ensure CSV is imported
-
-    if not os.path.exists(xml_path):
-        print(f"Error: XML file not found at {xml_path}")
-        return
-
-    REPORT_CSV_FILE = "LT_Estonian_Contamination_Report.csv"
-    
-    # 🟢 STRICT CORE DETECTION: Rely only on characters unique to Estonian
-    ESTONIAN_MARKERS = ['ö', 'ä', 'ü', 'õ']
-    
-    try:
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-    except Exception as e:
-        print(f"Error parsing XML file {xml_path}: {e}")
-        return
-
-    product_elements = root.findall('./channel/item')
-    contaminated_products = []
-
-    print(f"\n🔎 Starting final, namespaced contamination check on {len(product_elements)} products in LT feed...")
-
-    for item in product_elements:
-        # --- Data Extraction (FIXED to use NS for all report fields) ---
-        product_id = item.find('g:id', NS).text if item.find('g:id', NS) is not None and item.find('g:id', NS).text else 'N/A'
-        
-        # 💡 FIX: Use NS for title and link
-        title_node = item.find('g:title', NS) 
-        link_node = item.find('g:link', NS)
-        description_node = item.find('g:description', NS) 
-
-        # Ensure text is not None before stripping
-        title_text = title_node.text.strip() if title_node is not None and title_node.text else ''
-        link_text = link_node.text.strip() if link_node is not None and link_node.text else ''
-        description_text = description_node.text.strip() if description_node is not None and description_node.text else ''
-        
-        # --- Contamination Check Logic (Strictly on Description Text) ---
-        check_text = description_text.lower()
-        
-        # Check for any of the strict Estonian markers in the description text
-        is_contaminated = any(marker in check_text for marker in ESTONIAN_MARKERS)
-
-        if is_contaminated:
-            contaminated_products.append({
-                'ID': product_id,
-                'Title': title_text,
-                'Description': description_text.replace('\n', ' '), 
-                'Link': link_text 
-            })
-
-    # --- Write the Report CSV (GUARANTEED OUTPUT) ---
-    with open(REPORT_CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['ID', 'Title', 'Description', 'Link']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        
-        writer.writeheader()
-        
-        if contaminated_products:
-            writer.writerows(contaminated_products)
-            print(f"⚠️ Successfully created contamination report: {REPORT_CSV_FILE} with {len(contaminated_products)} problematic products.")
-        else:
-            print(f"✅ Full report check completed. No highly contaminated products found. Report file created with headers only.")
+# --- 3. CONTAMINATION REPORT LOGIC REMOVED ---
+# This section (lines 189-257 in the original script) has been entirely removed
+# as requested.
 
 # --- 4. FEED GENERATION LOGIC ---
 
@@ -259,7 +188,7 @@ def generate_meta_feed(processed_products, country_code):
         # 2. Append all original nodes, excluding the old image link
         for node in product_data['nodes']:
             if node.tag == '{http://base.google.com/ns/1.0}image_link':
-                continue 
+                continue
             item.append(node)
 
         # 3. Add the new image link node
@@ -288,8 +217,8 @@ def generate_tiktok_feed(processed_products, country_code):
     ET.SubElement(channel, 'link').text = GITHUB_PAGES_BASE_URL
 
     tiktok_required_tags = [
-        'id', 'title', 'description', 'availability', 'condition', 
-        'price', 'link', 'brand', 
+        'id', 'title', 'description', 'availability', 'condition',
+        'price', 'link', 'brand',
         'item_group_id', 'google_product_category', 'product_type',
         'sale_price', 'sale_price_effective_date', 'color', 'gender', 'size'
     ]
@@ -307,7 +236,7 @@ def generate_tiktok_feed(processed_products, country_code):
             
             if node is not None and node.text and node.text.strip():
                 prefix = 'g:' if tag_name in ['id', 'title', 'description', 'price', 'sale_price', 'link', 'image_link', 'brand'] or tag_name.startswith('custom_label') else ''
-                clean_text_content = node.text 
+                clean_text_content = node.text
                 
                 if prefix == 'g:':
                     ET.SubElement(item, '{' + NAMESPACES['g'] + '}' + tag_name).text = clean_text_content
@@ -336,10 +265,10 @@ def generate_google_feed(processed_products, country_code):
     print(f"\nCreating Google CSV Feed for {country_code}: {GOOGLE_FEED_FILENAME}")
 
     HEADERS = [
-        "ID", "ID2", "Item title", "Final URL", "Image URL", "Item subtitle", 
-        "Item Description", "Item category", "Price", "Sale price", 
-        "Contextual keywords", "Item address", "Tracking template", 
-        "Custom parameter", "Final mobile URL", "Android app link", 
+        "ID", "ID2", "Item title", "Final URL", "Image URL", "Item subtitle",
+        "Item Description", "Item category", "Price", "Sale price",
+        "Contextual keywords", "Item address", "Tracking template",
+        "Custom parameter", "Final mobile URL", "Android app link",
         "iOS app link", "iOS app store ID", "Formatted price", "Formatted sale price"
     ]
 
@@ -352,7 +281,7 @@ def generate_google_feed(processed_products, country_code):
             def get_value(tag_name):
                 node = product_data['item_elements'].get(tag_name)
                 # Check for node and text existence to prevent AttributeError
-                return node.text.strip() if node is not None and node.text is not None else '' 
+                return node.text.strip() if node is not None and node.text is not None else ''
 
             # 1. Map Contextual Keywords
             keywords_list = []
@@ -367,21 +296,21 @@ def generate_google_feed(processed_products, country_code):
             # 2. Build the Row
             row = {
                 "ID": get_value('id'),
-                "ID2": "", 
+                "ID2": "",
                 "Item title": get_value('title'),
                 "Final URL": get_value('link'),
                 "Image URL": f"{GITHUB_PAGES_BASE_URL}/ad_{product_data['id']}.jpg",
-                "Item subtitle": "", 
+                "Item subtitle": "",
                 "Item Description": get_value('description'),
                 "Item category": get_value('google_product_category') or get_value('category'), # Handle g:category too
                 "Price": get_value('price'),
-                "Sale price": get_value('sale_price'), 
+                "Sale price": get_value('sale_price'),
                 "Contextual keywords": contextual_keywords,
                 "Formatted price": product_data['formatted_price'],
                 "Formatted sale price": product_data['formatted_sale_price'],
                 # All other fields remain empty
-                "Item address": "", "Tracking template": "", "Custom parameter": "", 
-                "Final mobile URL": "", "Android app link": "", "iOS app link": "", 
+                "Item address": "", "Tracking template": "", "Custom parameter": "",
+                "Final mobile URL": "", "Android app link": "", "iOS app link": "",
                 "iOS app store ID": ""
             }
             
@@ -411,7 +340,7 @@ def process_single_feed(country_code, config, xml_file_path):
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    for item in root.iter('item'): 
+    for item in root.iter('item'):
         if product_count >= MAX_PRODUCTS_TO_GENERATE:
             break
             
@@ -442,12 +371,12 @@ def process_single_feed(country_code, config, xml_file_path):
                 is_correct_category = True
         
         # 🟢 FIX: Use un-prefixed tag for custom_label_0 (Confirmed by client)
-        label_element = item.find('custom_label_0', NAMESPACES) 
+        label_element = item.find('custom_label_0', NAMESPACES)
         is_lifestyle = False
         
-        if label_element is not None and label_element.text is not None: 
+        if label_element is not None and label_element.text is not None:
             # Use the robust check (strip and lower()) to catch variations
-            if label_element.text.strip().lower() == "lifestyle": 
+            if label_element.text.strip().lower() == "lifestyle":
                 is_lifestyle = True
             
         if not is_correct_category or not is_lifestyle:
@@ -473,7 +402,7 @@ def process_single_feed(country_code, config, xml_file_path):
             raw_price_str = element.text.split()[0]
             try:
                 price_value = float(raw_price_str)
-                currency_symbol = config['currency'].replace("EUR", "€") 
+                currency_symbol = config['currency'].replace("EUR", "€")
                 return f"{int(price_value)}{currency_symbol}" if price_value == int(price_value) else f"{price_value:.2f}{currency_symbol}"
             except ValueError:
                 return raw_price_str.replace(" EUR", "€")
@@ -503,14 +432,14 @@ def process_single_feed(country_code, config, xml_file_path):
 
         products_for_feed.append({
             'id': product_id,
-            'price_state': price_state, 
+            'price_state': price_state,
             'formatted_price': format_price(price_element),
             'formatted_sale_price': format_price(sale_price_element),
             'item_elements': item_elements,
             'nodes': list(item)
         })
 
-        # Generate Image 
+        # Generate Image
         image_urls_for_ad = image_urls[:3]
         create_ballzy_ad(image_urls_for_ad, formatted_display_price, product_id, final_price_color)
         product_count += 1
@@ -543,11 +472,9 @@ def process_all_feeds(country_configs):
     
     print("-" * 50)
 
-    # --- Step 2: Run Contamination Report for LT (on the full file) ---
-    if 'LT' in downloaded_files:
-        create_estonian_contamination_report(downloaded_files['LT'])
-        print("-" * 50)
-        
+    # --- Step 2: Skip Contamination Report (Removed) ---
+    # The contamination report step is no longer included here.
+    
     # --- Step 3: Process individual feeds with filtering/limits ---
     for code, config in country_configs.items():
         if code in downloaded_files:
