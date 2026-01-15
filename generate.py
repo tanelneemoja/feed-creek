@@ -21,7 +21,7 @@ FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
 OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
 TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
 
-LIMIT_PER_COUNTRY = 50 
+LIMIT_PER_COUNTRY = 90 
 NORMAL_PRICE_COLOR = "#1267F3" 
 SALE_PRICE_COLOR = "#cc02d2"
 
@@ -38,30 +38,57 @@ DYNAMIC_LAYOUT = {}
 # --- 2. LOGIC FUNCTIONS ---
 
 def get_layout_from_svg(svg_path):
-    """Maps coordinates from SVG IDs for precise placement."""
-    if not os.path.exists(svg_path):
-        print(f"CRITICAL: SVG not found at {svg_path}")
-        return None
-    
+    if not os.path.exists(svg_path): return None
     tree = ET.parse(svg_path)
     root = tree.getroot()
-    layout = {"slots": [], "price": {}, "squiggly": None}
+    layout = {"slots": {}, "price": {}, "squiggly": None}
     
+    # We will search the whole tree
     for elem in root.iter():
         eid = elem.get('id', '').lower()
-        if 'slot_' in eid:
-            layout["slots"].append({
-                "x": int(float(elem.get('x', 0))), "y": int(float(elem.get('y', 0))),
-                "w": int(float(elem.get('width', 0))), "h": int(float(elem.get('height', 0)))
-            })
+        
+        # 1. Map Image Slots
+        for idx in range(3):
+            if f'slot_{idx}' in eid:
+                coords = extract_best_coords(elem)
+                if coords:
+                    layout["slots"][idx] = {"x": coords[0], "y": coords[1], "w": coords[2], "h": coords[3]}
+
+        # 2. Map Squiggly (Deep Search)
         if 'squiggly' in eid:
-            layout["squiggly"] = {"x": int(float(elem.get('x', 0))), "y": int(float(elem.get('y', 0)))}
+            # Look at this element, then check its children if it's a group
+            coords = extract_best_coords(elem)
+            
+            # If group has no coords, look for the first child or mask inside it
+            if not coords or coords[0] == 0:
+                for child in elem.findall('.//*'):
+                    child_coords = extract_best_coords(child)
+                    if child_coords and child_coords[0] != 0:
+                        coords = child_coords
+                        break
+            
+            # If still nothing, look specifically for the mask attributes you provided
+            if not coords or coords[0] == 0:
+                mx = elem.get('x') or root.find(f".//*[@id='{eid}']").get('x')
+                my = elem.get('y') or root.find(f".//*[@id='{eid}']").get('y')
+                if mx and my:
+                    coords = (int(float(mx)), int(float(my)), 0, 0)
+
+            if coords:
+                layout["squiggly"] = {"x": coords[0], "y": coords[1]}
+                print(f"Mapped Squiggly to: {coords[0]}, {coords[1]}")
+
+        # 3. Map Price elements
         if 'price_border' in eid:
-            layout["price"]["x"] = int(float(elem.get('x', 0)))
-            layout["price"]["y"] = int(float(elem.get('y', 0)))
+            coords = extract_best_coords(elem)
+            if coords: layout["price"]["x"], layout["price"]["y"] = coords[0], coords[1]
+                
         if 'price_target' in eid:
-            layout["price"]["center_x"] = int(float(elem.get('x', 0))) + (int(float(elem.get('width', 0))) / 2)
-            layout["price"]["center_y"] = int(float(elem.get('y', 0))) + (int(float(elem.get('height', 0))) / 2)
+            coords = extract_best_coords(elem)
+            if coords:
+                layout["price"]["center_x"] = coords[0] + (coords[2] / 2)
+                layout["price"]["center_y"] = coords[1] + (coords[3] / 2)
+                
     return layout
 
 def create_ballzy_ad(image_urls, price_text, product_id, is_sale, data_hash):
