@@ -11,7 +11,7 @@ import hashlib
 import glob
 
 # --- 1. CONFIGURATION ---
-
+ 
 # Path to your assets
 ASSETS_DIR = "assets"
 SVG_LAYOUT_PATH = os.path.join(ASSETS_DIR, "ballzy_layout.svg")
