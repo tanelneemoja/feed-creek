@@ -16,7 +16,7 @@ FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
 OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
 TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
 
-LIMIT_PER_COUNTRY = 250
+LIMIT_PER_COUNTRY = 50 
 
 NORMAL_PRICE_COLOR = "#0055FF"
 SALE_PRICE_COLOR = "#cc02d2"
@@ -34,7 +34,6 @@ DYNAMIC_LAYOUT = {}
 # --- 2. LOGIC FUNCTIONS ---
 
 def get_layout_from_svg(svg_path):
-    """Aggressive search for IDs to map coordinates accurately."""
     if not os.path.exists(svg_path):
         print(f"CRITICAL ERROR: SVG not found at {svg_path}")
         return None
@@ -56,7 +55,6 @@ def get_layout_from_svg(svg_path):
                     "w": int(float(elem.get('width', 0))),
                     "h": int(float(elem.get('height', 0)))
                 })
-                print(f"  [OK] Found {eid}")
 
         # Match Price Box
         if 'price_border' in eid:
@@ -66,15 +64,13 @@ def get_layout_from_svg(svg_path):
                 "rect_x1": bx + int(float(elem.get('width', 0))),
                 "rect_y1": by + int(float(elem.get('height', 0)))
             })
-            print(f"  [OK] Found price_border")
 
         # Match Price Target
         if 'price_target' in eid:
             layout["price"]["center_x"] = int(float(elem.get('x', 0))) + (int(float(elem.get('width', 0))) / 2)
-            layout["price"]["center_y"] = int(float(target_y := elem.get('y', 0))) + (int(float(elem.get('height', 0))) / 2)
             layout["price"]["center_y"] = int(float(elem.get('y', 0))) + (int(float(elem.get('height', 0))) / 2)
-            print(f"  [OK] Found price_target")
 
+    print(f"  Mapped {len(layout['slots'])} image slots.")
     print(f"--- End Diagnostic ---\n")
     return layout
 
@@ -82,43 +78,48 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color, data_hash)
     output_path = os.path.join(OUTPUT_DIR, f"ad_{product_id}_{data_hash}.jpg")
     
     try:
-        # Load Template
-        base = Image.open(PNG_TEMPLATE_PATH).convert("RGBA")
-    except:
+        # Step A: Load Template and determine size
+        template = Image.open(PNG_TEMPLATE_PATH).convert("RGBA")
+        width, height = template.size
+        
+        # Step B: Create a fresh transparent canvas
+        # This will be the "bottom" layer where images sit
+        canvas = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+    except Exception as e:
+        print(f"Error loading template: {e}")
         return
 
-    # 1. Place Images (Bypassing potential Clip Path groups by pasting direct)
+    # Step C: Paste Product Images onto Canvas (BACKGROUND LAYER)
     for i, slot in enumerate(DYNAMIC_LAYOUT["slots"]):
         if i >= len(image_urls): break
         try:
             resp = requests.get(image_urls[i], timeout=10)
             img = Image.open(BytesIO(resp.content)).convert("RGBA")
-            
-            # Use 'fit' to ensure images don't look stretched
             fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
-            
-            # Use the fitted image itself as the alpha mask to ignore backgrounds
-            base.paste(fitted, (slot['x'], slot['y']), fitted)
+            canvas.paste(fitted, (slot['x'], slot['y']), fitted)
         except: continue
 
-    # 2. Draw Price Border (On top of images and template)
-    draw = ImageDraw.Draw(base)
+    # Step D: Paste Template on top of everything (FOREGROUND LAYER)
+    # This ensures the squiggly lines cover the image edges
+    canvas.paste(template, (0, 0), template)
+
+    # Step E: Draw Colored Price Box and Text (TOP LAYER)
+    draw = ImageDraw.Draw(canvas)
     p = DYNAMIC_LAYOUT.get("price", {})
     if "rect_x0" in p:
-        # Thicker border (8px) for better visibility
-        draw.rectangle([(p["rect_x0"], p["rect_y0"]), (p["rect_x1"], p["rect_y1"])], outline=price_color, width=8)
+        # Draw the rectangle after the template is pasted to ensure color is on top
+        draw.rectangle([(p["rect_x0"], p["rect_y0"]), (p["rect_x1"], p["rect_y1"])], outline=price_color, width=6)
     
-    # 3. Draw Price Text (Reduced size for better fit)
     try:
-        # Reduced from 80 to 60 for a cleaner look
-        font = ImageFont.truetype(FONT_PATH, 60)
+        # Smaller font size (50) to prevent wonkiness
+        font = ImageFont.truetype(FONT_PATH, 50)
         if "center_x" in p:
             _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
             draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=price_color, font=font)
     except: pass
 
-    # Convert to RGB to flatten and save as JPEG
-    base.convert("RGB").save(output_path, "JPEG", quality=92)
+    # Save as final JPEG
+    canvas.convert("RGB").save(output_path, "JPEG", quality=92)
 
 def main():
     global DYNAMIC_LAYOUT
@@ -139,7 +140,6 @@ def main():
         for item in list(root.iter('item'))[:LIMIT_PER_COUNTRY]:
             pid = item.find('g:id', NAMESPACES).text.strip()
             
-            # [Main, Add1, Add2]
             image_urls = [item.find('g:image_link', NAMESPACES).text.strip()]
             for add in item.findall('g:additional_image_link', NAMESPACES)[:2]:
                 image_urls.append(add.text.strip())
