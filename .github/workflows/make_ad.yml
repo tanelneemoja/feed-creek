@@ -1,20 +1,13 @@
-name: Generate Ad in Repo
+name: Generate Ballzy Ads
 
 on:
-  # 1. Manual Trigger (Keep this for quick, controlled testing)
   workflow_dispatch: 
-  
-  # 2. Automated Trigger (Runs when specific files are pushed to the main branch)
   push:
-    branches:
-      - main # Or your default branch name (e.g., master)
+    branches: [ main ]
     paths:
       - 'generate.py'
       - 'assets/**'
-      - '.github/workflows/make_ad.yml'
-      # Ignore the output directory so the Action's own commit doesn't trigger itself
-      - '!generated_ads/**'
-# Give the robot permission to write files back to your repo
+
 permissions:
   contents: write
 
@@ -30,7 +23,7 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install Libraries (Pillow and requests)
+      - name: Install Dependencies
         run: pip install Pillow requests
 
       - name: Run Generation Script
@@ -41,13 +34,14 @@ jobs:
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
           
-          # Add the output folder (containing all images)
-          git add generated_ads 
-          
-          # 🟢 NEW: Add all generated feed files (XML and CSV)
+          git add generated_ads/
           git add ballzy_*.xml || true
           git add ballzy_*.csv || true
           
-          # Commit only if there are changes
-          git commit -m "Automated multi-country feed generation and update" || echo "No new files to commit"
-          git push
+          # Only commit if changes exist to avoid empty commit errors
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Automated feed update [skip ci]"
+            git push
+          fi
