@@ -16,6 +16,8 @@ FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
 OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
 TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
 
+LIMIT_PER_COUNTRY = 250
+
 NORMAL_PRICE_COLOR = "#0055FF"
 SALE_PRICE_COLOR = "#cc02d2"
 
@@ -32,7 +34,7 @@ DYNAMIC_LAYOUT = {}
 # --- 2. LOGIC FUNCTIONS ---
 
 def get_layout_from_svg(svg_path):
-    """Maps SVG IDs to Pixel Coordinates."""
+    """Aggressive search for IDs to map coordinates accurately."""
     if not os.path.exists(svg_path):
         print(f"CRITICAL ERROR: SVG not found at {svg_path}")
         return None
@@ -41,39 +43,37 @@ def get_layout_from_svg(svg_path):
     tree = ET.parse(svg_path)
     root = tree.getroot()
     
-    def find_by_id(id_val):
-        return root.find(f".//*[@id='{id_val}']")
-
     layout = {"slots": [], "price": {}}
+    for elem in root.iter():
+        eid = elem.get('id', '').lower()
+        
+        # Match slots 0, 1, 2
+        for i in range(3):
+            if f'slot_{i}' in eid:
+                layout["slots"].append({
+                    "x": int(float(elem.get('x', 0))),
+                    "y": int(float(elem.get('y', 0))),
+                    "w": int(float(elem.get('width', 0))),
+                    "h": int(float(elem.get('height', 0)))
+                })
+                print(f"  [OK] Found {eid}")
 
-    # Map Image Slots
-    for i in range(3):
-        elem = find_by_id(f"slot_{i}")
-        if elem is not None:
-            layout["slots"].append({
-                "x": int(float(elem.get('x', 0))),
-                "y": int(float(elem.get('y', 0))),
-                "w": int(float(elem.get('width', 0))),
-                "h": int(float(elem.get('height', 0)))
+        # Match Price Box
+        if 'price_border' in eid:
+            bx, by = int(float(elem.get('x', 0))), int(float(elem.get('y', 0)))
+            layout["price"].update({
+                "rect_x0": bx, "rect_y0": by,
+                "rect_x1": bx + int(float(elem.get('width', 0))),
+                "rect_y1": by + int(float(elem.get('height', 0)))
             })
-            print(f"  [OK] Found slot_{i}")
+            print(f"  [OK] Found price_border")
 
-    # Map Price Box & Text Placement
-    border = find_by_id("price_border")
-    if border is not None:
-        bx, by = int(float(border.get('x', 0))), int(float(border.get('y', 0)))
-        layout["price"].update({
-            "rect_x0": bx, "rect_y0": by,
-            "rect_x1": bx + int(float(border.get('width', 0))),
-            "rect_y1": by + int(float(border.get('height', 0)))
-        })
-        print(f"  [OK] Found price_border")
-
-    target = find_by_id("price_target")
-    if target is not None:
-        layout["price"]["center_x"] = int(float(target.get('x', 0))) + (int(float(target.get('width', 0))) / 2)
-        layout["price"]["center_y"] = int(float(target.get('y', 0))) + (int(float(target.get('height', 0))) / 2)
-        print(f"  [OK] Found price_target")
+        # Match Price Target
+        if 'price_target' in eid:
+            layout["price"]["center_x"] = int(float(elem.get('x', 0))) + (int(float(elem.get('width', 0))) / 2)
+            layout["price"]["center_y"] = int(float(target_y := elem.get('y', 0))) + (int(float(elem.get('height', 0))) / 2)
+            layout["price"]["center_y"] = int(float(elem.get('y', 0))) + (int(float(elem.get('height', 0))) / 2)
+            print(f"  [OK] Found price_target")
 
     print(f"--- End Diagnostic ---\n")
     return layout
@@ -82,37 +82,43 @@ def create_ballzy_ad(image_urls, price_text, product_id, price_color, data_hash)
     output_path = os.path.join(OUTPUT_DIR, f"ad_{product_id}_{data_hash}.jpg")
     
     try:
+        # Load Template
         base = Image.open(PNG_TEMPLATE_PATH).convert("RGBA")
     except:
-        print(f"ERROR: No PNG found at {PNG_TEMPLATE_PATH}")
-        return None
-        
-    draw = ImageDraw.Draw(base)
+        return
 
-    # 1. Place Images based on SVG Slots
+    # 1. Place Images (Bypassing potential Clip Path groups by pasting direct)
     for i, slot in enumerate(DYNAMIC_LAYOUT["slots"]):
         if i >= len(image_urls): break
         try:
             resp = requests.get(image_urls[i], timeout=10)
             img = Image.open(BytesIO(resp.content)).convert("RGBA")
+            
+            # Use 'fit' to ensure images don't look stretched
             fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
+            
+            # Use the fitted image itself as the alpha mask to ignore backgrounds
             base.paste(fitted, (slot['x'], slot['y']), fitted)
         except: continue
 
-    # 2. Draw Price Border & Text using SVG Blueprint
+    # 2. Draw Price Border (On top of images and template)
+    draw = ImageDraw.Draw(base)
     p = DYNAMIC_LAYOUT.get("price", {})
     if "rect_x0" in p:
-        draw.rectangle([(p["rect_x0"], p["rect_y0"]), (p["rect_x1"], p["rect_y1"])], outline=price_color, width=6)
+        # Thicker border (8px) for better visibility
+        draw.rectangle([(p["rect_x0"], p["rect_y0"]), (p["rect_x1"], p["rect_y1"])], outline=price_color, width=8)
     
+    # 3. Draw Price Text (Reduced size for better fit)
     try:
-        font = ImageFont.truetype(FONT_PATH, 80)
+        # Reduced from 80 to 60 for a cleaner look
+        font = ImageFont.truetype(FONT_PATH, 60)
         if "center_x" in p:
             _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
-            # Perfect centering on price_target
             draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=price_color, font=font)
     except: pass
 
-    base.convert("RGB").save(output_path, "JPEG", quality=90)
+    # Convert to RGB to flatten and save as JPEG
+    base.convert("RGB").save(output_path, "JPEG", quality=92)
 
 def main():
     global DYNAMIC_LAYOUT
@@ -130,8 +136,10 @@ def main():
         
         root = ET.parse(path).getroot()
         products = []
-        for item in list(root.iter('item'))[:200]:
+        for item in list(root.iter('item'))[:LIMIT_PER_COUNTRY]:
             pid = item.find('g:id', NAMESPACES).text.strip()
+            
+            # [Main, Add1, Add2]
             image_urls = [item.find('g:image_link', NAMESPACES).text.strip()]
             for add in item.findall('g:additional_image_link', NAMESPACES)[:2]:
                 image_urls.append(add.text.strip())
