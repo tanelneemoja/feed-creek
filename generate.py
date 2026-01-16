@@ -5,15 +5,12 @@ from io import BytesIO
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 import hashlib
 import re
-import csv
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. CONFIGURATION ---
-GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/feed-creek"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
-TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_ads")
+TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_xml")
 
 FORMATS = {
     "square": {"svg": "ballzy_layout.svg", "template": "ballzy_template.png", "suffix": "sq", "font_size": 55},
@@ -25,9 +22,8 @@ PRICE_BOX_NORMAL = os.path.join(ASSETS_DIR, "price_box_normal.png")
 PRICE_BOX_SALE = os.path.join(ASSETS_DIR, "price_box_sale.png")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
 
-MAX_PRODUCTS_TO_GENERATE = 50
-NORMAL_PRICE_COLOR = "#1267F3"
 SALE_PRICE_COLOR = "#cc02d2"
+NORMAL_PRICE_COLOR = "#1267F3"
 NAMESPACES = {'g': 'http://base.google.com/ns/1.0'}
 
 COUNTRY_CONFIGS = {
@@ -37,181 +33,160 @@ COUNTRY_CONFIGS = {
     "FI": {"url": "https://backend.ballzy.eu/fi/amfeed/feed/download?id=103&file=cropink_fi.xml", "currency": "€"}
 }
 
-# --- 2. COORDINATE HELPERS ---
-
-def get_coords_from_path(d_string):
-    # Extracts all numbers and finds the bounding box of a path
-    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", d_string)
-    if not numbers: return None
-    coords = [float(n) for n in numbers]
-    x_vals, y_vals = coords[0::2], coords[1::2]
-    if not x_vals or not y_vals: return None
-    return int(min(x_vals)), int(min(y_vals)), int(max(x_vals)-min(x_vals)), int(max(y_vals)-min(y_vals))
-
-def extract_best_coords(elem):
-    # Standard Rects
-    x, y, w, h = elem.get('x'), elem.get('y'), elem.get('width'), elem.get('height')
-    if x is not None and y is not None:
-        return int(float(x)), int(float(y)), int(float(w or 0)), int(float(h or 0))
-    # Paths
-    d = elem.get('d')
-    if d:
-        return get_coords_from_path(d)
-    return None
+# --- 2. THE RECURSIVE COORDINATE ENGINE ---
 
 def get_layout_from_svg(svg_path):
-    if not os.path.exists(svg_path): return None
-    tree = ET.parse(svg_path); root = tree.getroot()
-    layout = {"slots": {}, "price": {}, "squiggly": None}
+    if not os.path.exists(svg_path): 
+        print(f"Missing SVG: {svg_path}")
+        return None
     
-    for elem in root.iter():
-        eid = (elem.get('id') or '').lower()
-        coords = extract_best_coords(elem)
-        if not coords: continue
+    tree = ET.parse(svg_path)
+    root = tree.getroot()
+    layout = {"slots": {}, "price": {}, "squiggly": None}
 
-        # Slots 0, 1, 2
+    def walk_svg(node, current_x=0, current_y=0):
+        # Handle "transform" attributes found on groups <g>
+        transform = node.get('transform', '')
+        tx, ty = 0, 0
+        if 'translate' in transform:
+            match = re.search(r'translate\(([-0-9.]+)\s*[, ]\s*([-0-9.]+)\)', transform)
+            if match:
+                tx, ty = float(match.group(1)), float(match.group(2))
+        
+        # Cumulative position logic
+        abs_x = current_x + tx
+        abs_y = current_y + ty
+
+        eid = (node.get('id') or '').lower()
+        
+        # Extract dimensions (handling potential floats from Figma)
+        lx = float(node.get('x', 0))
+        ly = float(node.get('y', 0))
+        lw = float(node.get('width', 0))
+        lh = float(node.get('height', 0))
+
+        # Special logic for Path objects (the squiggly usually is a <path>)
+        d = node.get('d')
+        if d and lw == 0:
+            nums = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", d)]
+            if nums:
+                xs, ys = nums[0::2], nums[1::2]
+                lx, ly, lw, lh = min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)
+
+        final_x, final_y = int(abs_x + lx), int(abs_y + ly)
+
+        # Map IDs to our Layout Dictionary
+        if 'squiggly' in eid and not layout["squiggly"]:
+            layout["squiggly"] = {"x": final_x, "y": final_y}
+        
+        if 'price_border' in eid:
+            layout["price"]["x"], layout["price"]["y"] = final_x, final_y
+            
+        if 'price_target' in eid:
+            layout["price"]["center_x"] = final_x + (lw / 2)
+            layout["price"]["center_y"] = final_y + (lh / 2)
+
         for idx in range(3):
             if f'slot_{idx}' in eid:
-                layout["slots"][idx] = {"x": coords[0], "y": coords[1], "w": coords[2], "h": coords[3]}
-        
-        # Squiggly
-        if 'squiggly' in eid:
-            layout["squiggly"] = {"x": coords[0], "y": coords[1]}
-            
-        # Price Elements
-        if 'price_border' in eid:
-            layout["price"]["x"], layout["price"]["y"] = coords[0], coords[1]
-        if 'price_target' in eid:
-            # We use the target to find the visual center for the text
-            layout["price"]["center_x"] = coords[0] + (coords[2] / 2)
-            layout["price"]["center_y"] = coords[1] + (coords[3] / 2)
-            
+                layout["slots"][idx] = {"x": final_x, "y": final_y, "w": int(lw), "h": int(lh)}
+
+        # Recursively visit children to handle nesting
+        for child in node:
+            walk_svg(child, abs_x, abs_y)
+
+    walk_svg(root)
     return layout
 
-# --- 3. AD GENERATION ---
+# --- 3. CORE AD GENERATION ---
 
-def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layout, fmt_key):
+def create_ad(image_urls, price_text, product_id, color, data_hash, layout, fmt_key):
     cfg = FORMATS[fmt_key]
-    out_name = f"ad_{product_id}_{data_hash}_{cfg['suffix']}.jpg"
-    out_path = os.path.join(OUTPUT_DIR, out_name)
+    out_path = os.path.join(OUTPUT_DIR, f"ad_{product_id}_{data_hash}_{cfg['suffix']}.jpg")
+    
     try:
+        # Create base
         template = Image.open(os.path.join(ASSETS_DIR, cfg['template'])).convert("RGBA")
         canvas = Image.new("RGBA", template.size, (255, 255, 255, 255))
-        canvas.paste(template, (0, 0), template)
-
-        # 1. Paste Images
-        mapping = {i: image_urls[i] for i in range(min(len(image_urls), 3))}
-        for idx, url in mapping.items():
+        
+        # 1. Paste Products UNDER the template
+        for idx, url in enumerate(image_urls[:3]):
             if idx in layout["slots"]:
-                slot = layout["slots"][idx]
+                s = layout["slots"][idx]
                 img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
                 
                 if fmt_key == "story":
-                    # For story, we use thumbnail (Contain) to avoid the "Too Zoomed In" look
-                    # This fits the whole shoe inside the width/height of the slot
-                    img.thumbnail((slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    # Center it
-                    paste_x = slot['x'] + (slot['w'] - img.width) // 2
-                    paste_y = slot['y'] + (slot['h'] - img.height) // 2
-                    canvas.paste(img, (paste_x, paste_y), img)
+                    # For Story, we center inside the slot without aggressive cropping
+                    img.thumbnail((s['w'], s['h']), Image.Resampling.LANCZOS)
+                    pos_x = s['x'] + (s['w'] - img.width) // 2
+                    pos_y = s['y'] + (s['h'] - img.height) // 2
+                    canvas.paste(img, (pos_x, pos_y), img)
                 else:
-                    # Square stays as 'Fit' (fills the box)
-                    fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    canvas.paste(fitted, (slot['x'], slot['y']), fitted)
+                    # Square uses "Fit" to fill the slot
+                    fitted = ImageOps.fit(img, (s['w'], s['h']), Image.Resampling.LANCZOS)
+                    canvas.paste(fitted, (s['x'], s['y']), fitted)
 
-        # 2. Squiggly (Pasted after images to stay on top)
-        if layout.get("squiggly") and os.path.exists(SQUIGGLY_PATH):
-            squig = Image.open(SQUIGGLY_PATH).convert("RGBA")
-            canvas.paste(squig, (layout["squiggly"]["x"], layout["squiggly"]["y"]), squig)
+        # 2. Paste the Main Frame Template
+        canvas.paste(template, (0, 0), template)
 
-        # 3. Price Box & Text
-        box_p = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
-        if "x" in layout["price"] and os.path.exists(box_p):
-            box = Image.open(box_p).convert("RGBA")
+        # 3. Paste Squiggly ON TOP of the frame
+        if layout["squiggly"] and os.path.exists(SQUIGGLY_PATH):
+            sq = Image.open(SQUIGGLY_PATH).convert("RGBA")
+            canvas.paste(sq, (layout["squiggly"]["x"], layout["squiggly"]["y"]), sq)
+
+        # 4. Draw Price Elements
+        box_img = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
+        if "x" in layout["price"] and os.path.exists(box_img):
+            box = Image.open(box_img).convert("RGBA")
             canvas.paste(box, (layout["price"]["x"], layout["price"]["y"]), box)
-            draw = ImageDraw.Draw(canvas); font = ImageFont.truetype(FONT_PATH, cfg['font_size'])
-            p = layout["price"]
-            _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
-            draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=color, font=font)
+            
+            draw = ImageDraw.Draw(canvas)
+            font = ImageFont.truetype(FONT_PATH, cfg['font_size'])
+            tw, th = draw.textbbox((0, 0), price_text, font=font)[2:]
+            draw.text((layout["price"]["center_x"] - tw/2, layout["price"]["center_y"] - th/2), 
+                      price_text, fill=color, font=font)
 
-        canvas.convert("RGB").save(out_path, "JPEG", quality=92)
-    except Exception as e: print(f"Error generating {out_name}: {e}")
+        canvas.convert("RGB").save(out_path, "JPEG", quality=95)
+    except Exception as e:
+        print(f"Error generating {product_id} ({fmt_key}): {e}")
 
-# --- 4. FEED GENERATORS ---
-
-def generate_meta_feed(processed_products, country_code):
-    filename = f"ballzy_{country_code.lower()}_ad_feed.xml"
-    ET.register_namespace('g', NAMESPACES['g'])
-    rss = ET.Element('rss', version="2.0"); channel = ET.SubElement(rss, 'channel')
-    for p in processed_products:
-        item = ET.SubElement(channel, 'item')
-        for node in p['nodes']:
-            if node.tag != '{http://base.google.com/ns/1.0}image_link': item.append(node)
-        ET.SubElement(item, '{http://base.google.com/ns/1.0}image_link').text = f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_sq.jpg"
-        ET.SubElement(item, '{http://base.google.com/ns/1.0}additional_image_link').text = f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_story.jpg"
-    ET.ElementTree(rss).write(filename, encoding='utf-8', xml_declaration=True)
-
-def generate_tiktok_feed(processed_products, country_code):
-    filename = f"ballzy_tiktok_{country_code.lower()}_ad_feed.xml"
-    ET.register_namespace('g', NAMESPACES['g'])
-    rss = ET.Element('rss', version="2.0"); channel = ET.SubElement(rss, 'channel')
-    for p in processed_products:
-        item = ET.SubElement(channel, 'item')
-        for node in p['nodes']:
-            if node.tag != '{http://base.google.com/ns/1.0}image_link': item.append(node)
-        ET.SubElement(item, '{http://base.google.com/ns/1.0}image_link').text = f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_sq.jpg"
-    ET.ElementTree(rss).write(filename, encoding='utf-8', xml_declaration=True)
-
-def generate_google_feed(processed_products, country_code):
-    filename = f"ballzy_{country_code.lower()}_google_feed.csv"
-    headers = ["ID", "Item title", "Final URL", "Image URL", "Price", "Sale price"]
-    with open(filename, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        writer.writeheader()
-        for p in processed_products:
-            writer.writerow({
-                "ID": p['id'], "Item title": p['title'], "Final URL": p['link'],
-                "Image URL": f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_sq.jpg",
-                "Price": p['formatted_price'], "Sale price": p['formatted_sale_price']
-            })
-
-# --- 5. MAIN ---
+# --- 4. MAIN EXECUTION ---
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True); os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+    for d in [OUTPUT_DIR, TEMP_DIR]: os.makedirs(d, exist_ok=True)
+    
+    # Load layout definitions once
     layouts = {k: get_layout_from_svg(os.path.join(ASSETS_DIR, v['svg'])) for k, v in FORMATS.items()}
     
-    for code, cfg in COUNTRY_CONFIGS.items():
-        print(f"Processing {code}...")
-        resp = requests.get(cfg['url']); xml_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{code}.xml")
-        with open(xml_path, 'wb') as f: f.write(resp.content)
+    for country, config in COUNTRY_CONFIGS.items():
+        print(f"Fetching {country} feed...")
+        r = requests.get(config['url'])
+        xml_file = os.path.join(TEMP_DIR, f"{country}.xml")
+        with open(xml_file, "wb") as f: f.write(r.content)
         
-        root = ET.parse(xml_path).getroot(); products_for_feed = []
-        for item in list(root.iter('item'))[:MAX_PRODUCTS_TO_GENERATE]:
+        root = ET.parse(xml_file).getroot()
+        products = []
+        for item in list(root.iter('item'))[:100]: # Max 100 products
             pid = item.find('g:id', NAMESPACES).text.strip()
-            sale_node = item.find('g:sale_price', NAMESPACES); is_sale = sale_node is not None
-            raw_p = sale_node.text if is_sale else item.find('g:price', NAMESPACES).text
-            price = raw_p.split()[0].replace(".00", "") + cfg['currency']
+            sale_p = item.find('g:sale_price', NAMESPACES)
+            is_sale = sale_p is not None
+            price_val = sale_p.text if is_sale else item.find('g:price', NAMESPACES).text
+            display_price = price_val.split()[0].replace(".00", "") + config['currency']
             
             imgs = [item.find('g:image_link', NAMESPACES).text.strip()]
-            for add in item.findall('g:additional_image_link', NAMESPACES)[:2]: imgs.append(add.text.strip())
+            for add in item.findall('g:additional_image_link', NAMESPACES)[:2]:
+                imgs.append(add.text.strip())
             
-            d_hash = hashlib.sha1(f"{pid}{price}".encode()).hexdigest()[:8]
-            products_for_feed.append({
-                'id': pid, 'data_hash': d_hash, 'nodes': list(item), 'image_urls': imgs,
-                'final_price_color': SALE_PRICE_COLOR if is_sale else NORMAL_PRICE_COLOR,
-                'formatted_display_price': price, 'title': item.find('g:title', NAMESPACES).text,
-                'link': item.find('g:link', NAMESPACES).text, 'formatted_price': price, 'formatted_sale_price': price if is_sale else ""
+            d_hash = hashlib.sha1(f"{pid}{display_price}".encode()).hexdigest()[:8]
+            products.append({
+                'id': pid, 'urls': imgs, 'price': display_price, 'hash': d_hash,
+                'color': SALE_PRICE_COLOR if is_sale else NORMAL_PRICE_COLOR
             })
 
-        with ThreadPoolExecutor(max_workers=16) as exe:
-            for p in products_for_feed:
-                exe.submit(create_ballzy_ad, p['image_urls'], p['formatted_display_price'], p['id'], p['final_price_color'], p['data_hash'], layouts['square'], 'square')
-                exe.submit(create_ballzy_ad, p['image_urls'], p['formatted_display_price'], p['id'], p['final_price_color'], p['data_hash'], layouts['story'], 'story')
-
-        generate_meta_feed(products_for_feed, code)
-        generate_tiktok_feed(products_for_feed, code)
-        generate_google_feed(products_for_feed, code)
+        print(f"Generating {len(products)} ads for {country}...")
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for p in products:
+                executor.submit(create_ad, p['urls'], p['price'], p['id'], p['color'], p['hash'], layouts['square'], 'square')
+                executor.submit(create_ad, p['urls'], p['price'], p['id'], p['color'], p['hash'], layouts['story'], 'story')
 
 if __name__ == "__main__":
     main()
