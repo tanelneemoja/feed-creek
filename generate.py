@@ -30,102 +30,155 @@ NORMAL_PRICE_COLOR = "#1267F3"
 SALE_PRICE_COLOR = "#cc02d2"
 NAMESPACES = {'g': 'http://base.google.com/ns/1.0'}
 
-# --- 2. IMAGE GENERATION ENGINE ---
+COUNTRY_CONFIGS = {
+    "EE": {"url": "https://backend.ballzy.eu/et/amfeed/feed/download?id=102&file=cropink_et.xml", "currency": "€"},
+    "LV": {"url": "https://backend.ballzy.eu/lv/amfeed/feed/download?id=104&file=cropink_lv.xml", "currency": "€"},
+    "LT": {"url": "https://backend.ballzy.eu/lt/amfeed/feed/download?id=105&file=cropink_lt.xml", "currency": "€"},
+    "FI": {"url": "https://backend.ballzy.eu/fi/amfeed/feed/download?id=103&file=cropink_fi.xml", "currency": "€"}
+}
+
+# --- 2. COORDINATE & IMAGE HELPERS ---
+
+def get_coords_from_path(d_string):
+    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", d_string)
+    if not numbers: return 0, 0, 0, 0
+    coords = [float(n) for n in numbers]
+    x_vals, y_vals = coords[0::2], coords[1::2]
+    return int(min(x_vals)), int(min(y_vals)), int(max(x_vals)-min(x_vals)), int(max(y_vals)-min(y_vals))
+
+def extract_best_coords(elem):
+    x, y, w, h, d = elem.get('x'), elem.get('y'), elem.get('width'), elem.get('height'), elem.get('d')
+    if x is not None and y is not None:
+        return int(float(x)), int(float(y)), int(float(w or 0)), int(float(h or 0))
+    elif d: return get_coords_from_path(d)
+    return None
+
+def get_layout_from_svg(svg_path):
+    if not os.path.exists(svg_path): return None
+    tree = ET.parse(svg_path); root = tree.getroot()
+    layout = {"slots": {}, "price": {}, "squiggly": None}
+    for elem in root.iter():
+        eid = elem.get('id', '').lower()
+        for idx in range(3):
+            if f'slot_{idx}' in eid:
+                c = extract_best_coords(elem)
+                if c: layout["slots"][idx] = {"x": c[0], "y": c[1], "w": c[2], "h": c[3]}
+        if 'squiggly' in eid:
+            c = extract_best_coords(elem) or next((extract_best_coords(d) for d in elem.iter() if extract_best_coords(d)), None)
+            if c: layout["squiggly"] = {"x": c[0], "y": c[1]}
+        if 'price_border' in eid:
+            c = extract_best_coords(elem)
+            if c: layout["price"]["x"], layout["price"]["y"] = c[0], c[1]
+        if 'price_target' in eid:
+            c = extract_best_coords(elem)
+            if c: layout["price"]["center_x"], layout["price"]["center_y"] = c[0]+(c[2]/2), c[1]+(c[3]/2)
+    return layout
 
 def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layout, fmt_key):
     cfg = FORMATS[fmt_key]
     out_name = f"ad_{product_id}_{data_hash}_{cfg['suffix']}.jpg"
     out_path = os.path.join(OUTPUT_DIR, out_name)
-    
     try:
         template = Image.open(os.path.join(ASSETS_DIR, cfg['template'])).convert("RGBA")
         canvas = Image.new("RGBA", template.size, (255, 255, 255, 255))
         canvas.paste(template, (0, 0), template)
-
         mapping = {i: image_urls[i] for i in range(min(len(image_urls), 3))}
-
         for idx, url in mapping.items():
             if idx in layout["slots"]:
                 slot = layout["slots"][idx]
-                resp = requests.get(url, timeout=10)
-                img = Image.open(BytesIO(resp.content)).convert("RGBA")
-                
+                img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
                 if fmt_key == "story":
-                    # CONTAIN LOGIC: Prevents zooming/cropping
                     img.thumbnail((slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    pos_x = slot['x'] + (slot['w'] - img.width) // 2
-                    pos_y = slot['y'] + (slot['h'] - img.height) // 2
-                    canvas.paste(img, (pos_x, pos_y), img)
+                    canvas.paste(img, (slot['x'] + (slot['w'] - img.width)//2, slot['y'] + (slot['h'] - img.height)//2), img)
                 else:
-                    # FILL LOGIC: For square format
-                    fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    canvas.paste(fitted, (slot['x'], slot['y']), fitted)
-
-        # Drawing Price Box & Text
+                    canvas.paste(ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS), (slot['x'], slot['y']))
         box_p = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
         if os.path.exists(box_p) and "x" in layout["price"]:
             box = Image.open(box_p).convert("RGBA")
             canvas.paste(box, (layout["price"]["x"], layout["price"]["y"]), box)
-            draw = ImageDraw.Draw(canvas)
-            font = ImageFont.truetype(FONT_PATH, cfg['font_size'])
-            p = layout["price"]
+            draw = ImageDraw.Draw(canvas); font = ImageFont.truetype(FONT_PATH, cfg['font_size']); p = layout["price"]
             _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
             draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=color, font=font)
-
         canvas.convert("RGB").save(out_path, "JPEG", quality=92)
-        return out_name
-    except Exception as e:
-        print(f"Error generating {out_name}: {e}")
-        return None
+    except Exception as e: print(f"Error {out_name}: {e}")
 
-# --- 3. FEED GENERATION LOGIC ---
+# --- 3. FEED GENERATORS ---
 
 def generate_meta_feed(processed_products, country_code):
     filename = f"ballzy_{country_code.lower()}_ad_feed.xml"
     ET.register_namespace('g', NAMESPACES['g'])
     rss = ET.Element('rss', version="2.0")
     channel = ET.SubElement(rss, 'channel')
-    
     for p in processed_products:
         item = ET.SubElement(channel, 'item')
         for node in p['nodes']:
-            if node.tag != '{http://base.google.com/ns/1.0}image_link':
-                item.append(node)
-        
-        # Add Square as main, Story as additional
+            if node.tag != '{http://base.google.com/ns/1.0}image_link': item.append(node)
         ET.SubElement(item, '{http://base.google.com/ns/1.0}image_link').text = f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_sq.jpg"
         ET.SubElement(item, '{http://base.google.com/ns/1.0}additional_image_link').text = f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_story.jpg"
-
     ET.ElementTree(rss).write(filename, encoding='utf-8', xml_declaration=True)
 
 def generate_tiktok_feed(processed_products, country_code):
-    # (Original TikTok Logic preserved here)
-    pass
+    filename = f"ballzy_tiktok_{country_code.lower()}_ad_feed.xml"
+    ET.register_namespace('g', NAMESPACES['g'])
+    rss = ET.Element('rss', version="2.0")
+    channel = ET.SubElement(rss, 'channel')
+    for p in processed_products:
+        item = ET.SubElement(channel, 'item')
+        for node in p['nodes']:
+            if node.tag != '{http://base.google.com/ns/1.0}image_link': item.append(node)
+        ET.SubElement(item, '{http://base.google.com/ns/1.0}image_link').text = f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_sq.jpg"
+    ET.ElementTree(rss).write(filename, encoding='utf-8', xml_declaration=True)
 
 def generate_google_feed(processed_products, country_code):
-    # (Original Google CSV Logic preserved here)
-    pass
+    filename = f"ballzy_{country_code.lower()}_google_feed.csv"
+    headers = ["ID", "Item title", "Final URL", "Image URL", "Price", "Sale price"]
+    with open(filename, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        for p in processed_products:
+            writer.writerow({
+                "ID": p['id'], "Item title": p['title'], "Final URL": p['link'],
+                "Image URL": f"{GITHUB_PAGES_BASE_URL}/generated_ads/ad_{p['id']}_{p['data_hash']}_sq.jpg",
+                "Price": p['formatted_price'], "Sale price": p['formatted_sale_price']
+            })
 
-# --- 4. MAIN EXECUTION ---
+# --- 4. MAIN PROCESS ---
 
-def process_single_feed(country_code, config, xml_file_path, layouts):
-    # ... (Filtering and data extraction logic from your current script) ...
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True); os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
+    layouts = {k: get_layout_from_svg(os.path.join(ASSETS_DIR, v['svg'])) for k, v in FORMATS.items()}
     
-    # Concurrent Generation of both formats
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        futures = []
-        for p in products_for_feed:
-            futures.append(executor.submit(create_ballzy_ad, p['image_urls'], p['formatted_display_price'], p['id'], p['final_price_color'], p['data_hash'], layouts['square'], 'square'))
-            futures.append(executor.submit(create_ballzy_ad, p['image_urls'], p['formatted_display_price'], p['id'], p['final_price_color'], p['data_hash'], layouts['story'], 'story'))
+    for code, cfg in COUNTRY_CONFIGS.items():
+        resp = requests.get(cfg['url']); xml_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{code}.xml")
+        with open(xml_path, 'wb') as f: f.write(resp.content)
         
-        for future in as_completed(futures):
-            future.result()
+        root = ET.parse(xml_path).getroot(); products_for_feed = []
+        for item in list(root.iter('item'))[:MAX_PRODUCTS_TO_GENERATE]:
+            pid = item.find('g:id', NAMESPACES).text.strip()
+            # Filtering logic (Simplified for this block - re-add your lifestyle/category filter as needed)
+            sale_node = item.find('g:sale_price', NAMESPACES); is_sale = sale_node is not None
+            raw_p = sale_node.text if is_sale else item.find('g:price', NAMESPACES).text
+            price = raw_p.split()[0].replace(".00", "") + cfg['currency']
+            
+            imgs = [item.find('g:image_link', NAMESPACES).text.strip()]
+            for add in item.findall('g:additional_image_link', NAMESPACES)[:2]: imgs.append(add.text.strip())
+            
+            d_hash = hashlib.sha1(f"{pid}{price}".encode()).hexdigest()[:8]
+            products_for_feed.append({
+                'id': pid, 'data_hash': d_hash, 'nodes': list(item), 'image_urls': imgs,
+                'final_price_color': SALE_PRICE_COLOR if is_sale else NORMAL_PRICE_COLOR,
+                'formatted_display_price': price, 'title': item.find('g:title', NAMESPACES).text,
+                'link': item.find('g:link', NAMESPACES).text, 'formatted_price': price, 'formatted_sale_price': price if is_sale else ""
+            })
 
-    generate_meta_feed(products_for_feed, country_code)
-    generate_google_feed(products_for_feed, country_code)
-    generate_tiktok_feed(products_for_feed, country_code)
+        with ThreadPoolExecutor(max_workers=16) as exe:
+            for p in products_for_feed:
+                exe.submit(create_ballzy_ad, p['image_urls'], p['formatted_display_price'], p['id'], p['final_price_color'], p['data_hash'], layouts['square'], 'square')
+                exe.submit(create_ballzy_ad, p['image_urls'], p['formatted_display_price'], p['id'], p['final_price_color'], p['data_hash'], layouts['story'], 'story')
+
+        generate_meta_feed(products_for_feed, code)
+        generate_tiktok_feed(products_for_feed, code)
+        generate_google_feed(products_for_feed, code)
 
 if __name__ == "__main__":
-    # Load both layouts
-    layouts = {k: get_layout_from_svg(os.path.join(ASSETS_DIR, v['svg'])) for k, v in FORMATS.items()}
-    # process_all_feeds(COUNTRY_CONFIGS)
+    main()
