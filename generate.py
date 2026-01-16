@@ -7,7 +7,7 @@ import hashlib
 import re
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
- 
+
 # --- 1. CONFIGURATION ---
 GITHUB_PAGES_BASE_URL = "https://tanelneemoja.github.io/feed-creek"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +25,7 @@ PRICE_BOX_NORMAL = os.path.join(ASSETS_DIR, "price_box_normal.png")
 PRICE_BOX_SALE = os.path.join(ASSETS_DIR, "price_box_sale.png")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
 
-MAX_PRODUCTS_TO_GENERATE = 50
+MAX_PRODUCTS_TO_GENERATE = 100
 NORMAL_PRICE_COLOR = "#1267F3"
 SALE_PRICE_COLOR = "#cc02d2"
 NAMESPACES = {'g': 'http://base.google.com/ns/1.0'}
@@ -57,27 +57,41 @@ def extract_best_coords(elem):
     return None
 
 def get_layout_from_svg(svg_path):
-    if not os.path.exists(svg_path): return None
+    if not os.path.exists(svg_path):
+        print(f"!!! ERROR: File not found: {svg_path}")
+        return None
+    
+    print(f"--- Parsing Layout: {os.path.basename(svg_path)} ---")
     tree = ET.parse(svg_path); root = tree.getroot()
     layout = {"slots": {}, "price": {}, "squiggly": None}
+    
     for elem in root.iter():
         eid = (elem.get('id') or '').lower()
+        if eid:
+            print(f"  Found ID: {eid}") # This helps us see what Figma named things
+        
         for idx in range(3):
             if f'slot_{idx}' in eid:
                 c = extract_best_coords(elem)
                 if c: layout["slots"][idx] = {"x": c[0], "y": c[1], "w": c[2], "h": c[3]}
+        
+        # Aggressive squiggly check
         if 'squiggly' in eid:
-            c = extract_best_coords(elem)
-            if c: layout["squiggly"] = {"x": c[0], "y": c[1]}
+            c = extract_best_coords(elem) or next((extract_best_coords(ch) for ch in elem.iter() if extract_best_coords(ch)), None)
+            if c: 
+                layout["squiggly"] = {"x": c[0], "y": c[1]}
+                print(f"  >> SUCCESS: Squiggly localized at {c[0]}, {c[1]}")
+
         if 'price_border' in eid:
             c = extract_best_coords(elem)
             if c: layout["price"]["x"], layout["price"]["y"] = c[0], c[1]
         if 'price_target' in eid:
             c = extract_best_coords(elem)
             if c: layout["price"]["center_x"], layout["price"]["center_y"] = c[0]+(c[2]/2), c[1]+(c[3]/2)
+            
     return layout
 
-# --- 3. IMAGE GENERATION ENGINE ---
+# --- 3. AD GENERATION ---
 
 def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layout, fmt_key):
     cfg = FORMATS[fmt_key]
@@ -93,26 +107,17 @@ def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layou
         for idx, url in mapping.items():
             if idx in layout["slots"]:
                 slot = layout["slots"][idx]
-                resp = requests.get(url, timeout=10)
-                img = Image.open(BytesIO(resp.content)).convert("RGBA")
-                
-                if fmt_key == "story":
-                    # Story: Use pad/contain logic to prevent zooming
-                    img.thumbnail((slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    pos_x = slot['x'] + (slot['w'] - img.width) // 2
-                    pos_y = slot['y'] + (slot['h'] - img.height) // 2
-                    canvas.paste(img, (pos_x, pos_y), img)
-                else:
-                    # Square: Standard fit
-                    fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    canvas.paste(fitted, (slot['x'], slot['y']), fitted)
+                img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
+                # ImageOps.fit ensures the image stays in the SVG slot position
+                fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
+                canvas.paste(fitted, (slot['x'], slot['y']), fitted)
 
-        # 2. Squiggly (Pasted AFTER images to ensure visibility)
-        if layout["squiggly"] and os.path.exists(SQUIGGLY_PATH):
+        # 2. Squiggly (Pasted AFTER images)
+        if layout.get("squiggly") and os.path.exists(SQUIGGLY_PATH):
             squig = Image.open(SQUIGGLY_PATH).convert("RGBA")
             canvas.paste(squig, (layout["squiggly"]["x"], layout["squiggly"]["y"]), squig)
 
-        # 3. Price Elements
+        # 3. Price
         box_p = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
         if "x" in layout["price"] and os.path.exists(box_p):
             box = Image.open(box_p).convert("RGBA")
@@ -123,15 +128,14 @@ def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layou
             draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=color, font=font)
 
         canvas.convert("RGB").save(out_path, "JPEG", quality=92)
-    except Exception as e: print(f"Error {out_name}: {e}")
+    except Exception as e: pass
 
 # --- 4. FEED GENERATORS ---
 
 def generate_meta_feed(processed_products, country_code):
     filename = f"ballzy_{country_code.lower()}_ad_feed.xml"
     ET.register_namespace('g', NAMESPACES['g'])
-    rss = ET.Element('rss', version="2.0")
-    channel = ET.SubElement(rss, 'channel')
+    rss = ET.Element('rss', version="2.0"); channel = ET.SubElement(rss, 'channel')
     for p in processed_products:
         item = ET.SubElement(channel, 'item')
         for node in p['nodes']:
@@ -143,8 +147,7 @@ def generate_meta_feed(processed_products, country_code):
 def generate_tiktok_feed(processed_products, country_code):
     filename = f"ballzy_tiktok_{country_code.lower()}_ad_feed.xml"
     ET.register_namespace('g', NAMESPACES['g'])
-    rss = ET.Element('rss', version="2.0")
-    channel = ET.SubElement(rss, 'channel')
+    rss = ET.Element('rss', version="2.0"); channel = ET.SubElement(rss, 'channel')
     for p in processed_products:
         item = ET.SubElement(channel, 'item')
         for node in p['nodes']:
@@ -165,7 +168,7 @@ def generate_google_feed(processed_products, country_code):
                 "Price": p['formatted_price'], "Sale price": p['formatted_sale_price']
             })
 
-# --- 5. MAIN EXECUTION ---
+# --- 5. MAIN ---
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True); os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
@@ -179,7 +182,6 @@ def main():
         root = ET.parse(xml_path).getroot(); products_for_feed = []
         for item in list(root.iter('item'))[:MAX_PRODUCTS_TO_GENERATE]:
             pid = item.find('g:id', NAMESPACES).text.strip()
-            # Category/Lifestyle filters would go here
             sale_node = item.find('g:sale_price', NAMESPACES); is_sale = sale_node is not None
             raw_p = sale_node.text if is_sale else item.find('g:price', NAMESPACES).text
             price = raw_p.split()[0].replace(".00", "") + cfg['currency']
