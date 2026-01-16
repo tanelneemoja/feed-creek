@@ -37,20 +37,23 @@ COUNTRY_CONFIGS = {
     "FI": {"url": "https://backend.ballzy.eu/fi/amfeed/feed/download?id=103&file=cropink_fi.xml", "currency": "€"}
 }
 
-# --- 2. COORDINATE & IMAGE HELPERS ---
+# --- 2. COORDINATE HELPERS ---
 
 def get_coords_from_path(d_string):
     numbers = re.findall(r"[-+]?\d*\.\d+|\d+", d_string)
-    if not numbers: return 0, 0, 0, 0
+    if not numbers: return None
     coords = [float(n) for n in numbers]
     x_vals, y_vals = coords[0::2], coords[1::2]
+    if not x_vals or not y_vals: return None
     return int(min(x_vals)), int(min(y_vals)), int(max(x_vals)-min(x_vals)), int(max(y_vals)-min(y_vals))
 
 def extract_best_coords(elem):
-    x, y, w, h, d = elem.get('x'), elem.get('y'), elem.get('width'), elem.get('height'), elem.get('d')
+    x, y, w, h = elem.get('x'), elem.get('y'), elem.get('width'), elem.get('height')
     if x is not None and y is not None:
         return int(float(x)), int(float(y)), int(float(w or 0)), int(float(h or 0))
-    elif d: return get_coords_from_path(d)
+    d = elem.get('d')
+    if d:
+        return get_coords_from_path(d)
     return None
 
 def get_layout_from_svg(svg_path):
@@ -58,13 +61,13 @@ def get_layout_from_svg(svg_path):
     tree = ET.parse(svg_path); root = tree.getroot()
     layout = {"slots": {}, "price": {}, "squiggly": None}
     for elem in root.iter():
-        eid = elem.get('id', '').lower()
+        eid = (elem.get('id') or '').lower()
         for idx in range(3):
             if f'slot_{idx}' in eid:
                 c = extract_best_coords(elem)
                 if c: layout["slots"][idx] = {"x": c[0], "y": c[1], "w": c[2], "h": c[3]}
         if 'squiggly' in eid:
-            c = extract_best_coords(elem) or next((extract_best_coords(d) for d in elem.iter() if extract_best_coords(d)), None)
+            c = extract_best_coords(elem)
             if c: layout["squiggly"] = {"x": c[0], "y": c[1]}
         if 'price_border' in eid:
             c = extract_best_coords(elem)
@@ -74,6 +77,8 @@ def get_layout_from_svg(svg_path):
             if c: layout["price"]["center_x"], layout["price"]["center_y"] = c[0]+(c[2]/2), c[1]+(c[3]/2)
     return layout
 
+# --- 3. IMAGE GENERATION ENGINE ---
+
 def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layout, fmt_key):
     cfg = FORMATS[fmt_key]
     out_name = f"ad_{product_id}_{data_hash}_{cfg['suffix']}.jpg"
@@ -82,27 +87,45 @@ def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layou
         template = Image.open(os.path.join(ASSETS_DIR, cfg['template'])).convert("RGBA")
         canvas = Image.new("RGBA", template.size, (255, 255, 255, 255))
         canvas.paste(template, (0, 0), template)
+
+        # 1. Product Images
         mapping = {i: image_urls[i] for i in range(min(len(image_urls), 3))}
         for idx, url in mapping.items():
             if idx in layout["slots"]:
                 slot = layout["slots"][idx]
-                img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
+                resp = requests.get(url, timeout=10)
+                img = Image.open(BytesIO(resp.content)).convert("RGBA")
+                
                 if fmt_key == "story":
+                    # Story: Use pad/contain logic to prevent zooming
                     img.thumbnail((slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                    canvas.paste(img, (slot['x'] + (slot['w'] - img.width)//2, slot['y'] + (slot['h'] - img.height)//2), img)
+                    pos_x = slot['x'] + (slot['w'] - img.width) // 2
+                    pos_y = slot['y'] + (slot['h'] - img.height) // 2
+                    canvas.paste(img, (pos_x, pos_y), img)
                 else:
-                    canvas.paste(ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS), (slot['x'], slot['y']))
+                    # Square: Standard fit
+                    fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
+                    canvas.paste(fitted, (slot['x'], slot['y']), fitted)
+
+        # 2. Squiggly (Pasted AFTER images to ensure visibility)
+        if layout["squiggly"] and os.path.exists(SQUIGGLY_PATH):
+            squig = Image.open(SQUIGGLY_PATH).convert("RGBA")
+            canvas.paste(squig, (layout["squiggly"]["x"], layout["squiggly"]["y"]), squig)
+
+        # 3. Price Elements
         box_p = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
-        if os.path.exists(box_p) and "x" in layout["price"]:
+        if "x" in layout["price"] and os.path.exists(box_p):
             box = Image.open(box_p).convert("RGBA")
             canvas.paste(box, (layout["price"]["x"], layout["price"]["y"]), box)
-            draw = ImageDraw.Draw(canvas); font = ImageFont.truetype(FONT_PATH, cfg['font_size']); p = layout["price"]
+            draw = ImageDraw.Draw(canvas); font = ImageFont.truetype(FONT_PATH, cfg['font_size'])
+            p = layout["price"]
             _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
             draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=color, font=font)
+
         canvas.convert("RGB").save(out_path, "JPEG", quality=92)
     except Exception as e: print(f"Error {out_name}: {e}")
 
-# --- 3. FEED GENERATORS ---
+# --- 4. FEED GENERATORS ---
 
 def generate_meta_feed(processed_products, country_code):
     filename = f"ballzy_{country_code.lower()}_ad_feed.xml"
@@ -142,20 +165,21 @@ def generate_google_feed(processed_products, country_code):
                 "Price": p['formatted_price'], "Sale price": p['formatted_sale_price']
             })
 
-# --- 4. MAIN PROCESS ---
+# --- 5. MAIN EXECUTION ---
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True); os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
     layouts = {k: get_layout_from_svg(os.path.join(ASSETS_DIR, v['svg'])) for k, v in FORMATS.items()}
     
     for code, cfg in COUNTRY_CONFIGS.items():
+        print(f"Processing {code}...")
         resp = requests.get(cfg['url']); xml_path = os.path.join(TEMP_DOWNLOAD_DIR, f"{code}.xml")
         with open(xml_path, 'wb') as f: f.write(resp.content)
         
         root = ET.parse(xml_path).getroot(); products_for_feed = []
         for item in list(root.iter('item'))[:MAX_PRODUCTS_TO_GENERATE]:
             pid = item.find('g:id', NAMESPACES).text.strip()
-            # Filtering logic (Simplified for this block - re-add your lifestyle/category filter as needed)
+            # Category/Lifestyle filters would go here
             sale_node = item.find('g:sale_price', NAMESPACES); is_sale = sale_node is not None
             raw_p = sale_node.text if is_sale else item.find('g:price', NAMESPACES).text
             price = raw_p.split()[0].replace(".00", "") + cfg['currency']
