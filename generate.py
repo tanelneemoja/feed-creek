@@ -10,16 +10,31 @@ from concurrent.futures import ThreadPoolExecutor
 # --- 1. CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-SVG_LAYOUT_PATH = os.path.join(ASSETS_DIR, "ballzy_layout.svg")
-PNG_TEMPLATE_PATH = os.path.join(ASSETS_DIR, "ballzy_template.png")
+OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
+TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
+
+# Replace this with your actual GitHub Pages or CDN base URL
+BASE_PUBLIC_URL = "https://yourusername.github.io/feed-creek/generated_ads"
+
+FORMATS = {
+    "square": {
+        "svg": "ballzy_layout.svg",
+        "template": "ballzy_template.png",
+        "suffix": "sq",
+        "font_size": 55
+    },
+    "story": {
+        "svg": "ballzy_layout_story.svg",
+        "template": "ballzy_template_story.png",
+        "suffix": "story",
+        "font_size": 80  # Larger font for vertical mobile view
+    }
+}
 
 SQUIGGLY_PATH = os.path.join(ASSETS_DIR, "squiggly.png")
 PRICE_BOX_NORMAL = os.path.join(ASSETS_DIR, "price_box_normal.png")
 PRICE_BOX_SALE = os.path.join(ASSETS_DIR, "price_box_sale.png")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
-
-OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
-TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
 
 LIMIT_PER_COUNTRY = 50 
 NORMAL_PRICE_COLOR = "#1267F3" 
@@ -33,11 +48,11 @@ COUNTRY_CONFIGS = {
 }
 
 NAMESPACES = {'g': 'http://base.google.com/ns/1.0'}
+ET.register_namespace('g', NAMESPACES['g'])
 
-# --- 2. HELPER FUNCTIONS (Defined before use) ---
+# --- 2. COORDINATE HELPERS ---
 
 def get_coords_from_path(d_string):
-    """Extracts bounding box from SVG path data."""
     numbers = re.findall(r"[-+]?\d*\.\d+|\d+", d_string)
     if not numbers: return 0, 0, 0, 0
     coords = [float(n) for n in numbers]
@@ -46,150 +61,132 @@ def get_coords_from_path(d_string):
     return int(min(x_vals)), int(min(y_vals)), int(max(x_vals)-min(x_vals)), int(max(y_vals)-min(y_vals))
 
 def extract_best_coords(elem):
-    """Checks for x/y attributes or parses path 'd'."""
-    x = elem.get('x')
-    y = elem.get('y')
-    w = elem.get('width')
-    h = elem.get('height')
-    d = elem.get('d')
+    x, y, w, h, d = elem.get('x'), elem.get('y'), elem.get('width'), elem.get('height'), elem.get('d')
     if x is not None and y is not None:
         return int(float(x)), int(float(y)), int(float(w or 0)), int(float(h or 0))
     elif d:
         return get_coords_from_path(d)
     return None
 
-def get_layout_from_svg(svg_path):
-    if not os.path.exists(svg_path): 
-        print(f"Error: {svg_path} not found")
-        return None
-    
+def get_layout(svg_filename):
+    svg_path = os.path.join(ASSETS_DIR, svg_filename)
+    if not os.path.exists(svg_path): return None
     tree = ET.parse(svg_path)
     root = tree.getroot()
     layout = {"slots": {}, "price": {}, "squiggly": None}
-    
     for elem in root.iter():
         eid = elem.get('id', '').lower()
-        
-        # 1. Image Slots
         for idx in range(3):
             if f'slot_{idx}' in eid:
-                coords = extract_best_coords(elem)
-                if coords:
-                    layout["slots"][idx] = {"x": coords[0], "y": coords[1], "w": coords[2], "h": coords[3]}
-
-        # 2. Squiggly (Deep Search for nested mask coords)
+                c = extract_best_coords(elem)
+                if c: layout["slots"][idx] = {"x": c[0], "y": c[1], "w": c[2], "h": c[3]}
         if 'squiggly' in eid:
-            coords = extract_best_coords(elem)
-            # If group is empty, look deep inside for the first element with coords (like your mask)
-            if not coords or coords[0] == 0:
-                for descendant in elem.iter():
-                    d_coords = extract_best_coords(descendant)
-                    if d_coords and d_coords[0] != 0:
-                        coords = d_coords
-                        break
-            if coords:
-                layout["squiggly"] = {"x": coords[0], "y": coords[1]}
-                print(f"DEBUG: Found Squiggly at {layout['squiggly']}")
-
-        # 3. Price
+            c = extract_best_coords(elem)
+            if not c or c[0] == 0:
+                for d in elem.iter():
+                    dc = extract_best_coords(d)
+                    if dc and dc[0] != 0: c = dc; break
+            if c: layout["squiggly"] = {"x": c[0], "y": c[1]}
         if 'price_border' in eid:
-            coords = extract_best_coords(elem)
-            if coords: layout["price"]["x"], layout["price"]["y"] = coords[0], coords[1]
-                
+            c = extract_best_coords(elem)
+            if c: layout["price"]["x"], layout["price"]["y"] = c[0], c[1]
         if 'price_target' in eid:
-            coords = extract_best_coords(elem)
-            if coords:
-                layout["price"]["center_x"] = coords[0] + (coords[2] / 2)
-                layout["price"]["center_y"] = coords[1] + (coords[3] / 2)
-                
+            c = extract_best_coords(elem)
+            if c: layout["price"]["center_x"], layout["price"]["center_y"] = c[0]+(c[2]/2), c[1]+(c[3]/2)
     return layout
 
-# --- 3. CORE LOGIC ---
+# --- 3. GENERATION ENGINE ---
 
-def create_ballzy_ad(image_urls, price_text, product_id, is_sale, data_hash, layout):
-    output_path = os.path.join(OUTPUT_DIR, f"ad_{product_id}_{data_hash}.jpg")
-    text_color = SALE_PRICE_COLOR if is_sale else NORMAL_PRICE_COLOR
-    
+def create_image(image_urls, price_text, product_id, is_sale, data_hash, layout, fmt_key):
+    cfg = FORMATS[fmt_key]
+    out_name = f"ad_{product_id}_{data_hash}_{cfg['suffix']}.jpg"
+    out_path = os.path.join(OUTPUT_DIR, out_name)
+    color = SALE_PRICE_COLOR if is_sale else NORMAL_PRICE_COLOR
+
     try:
-        template = Image.open(PNG_TEMPLATE_PATH).convert("RGBA")
+        tmp_path = os.path.join(ASSETS_DIR, cfg['template'])
+        template = Image.open(tmp_path).convert("RGBA")
         canvas = Image.new("RGBA", template.size, (255, 255, 255, 255))
-        
-        # LAYER 1: TEMPLATE (BACKGROUND)
         canvas.paste(template, (0, 0), template)
 
-        # LAYER 2: PRODUCT IMAGES (Slot Mapping Logic)
-        mapping = {0: image_urls[0]} # Main image always in slot 0
-        if len(image_urls) == 2:
-            mapping[1] = image_urls[1] # Single extra goes to slot 1
-        elif len(image_urls) >= 3:
-            mapping[1] = image_urls[1]
-            mapping[2] = image_urls[2]
+        mapping = {0: image_urls[0]}
+        if len(image_urls) == 2: mapping[1] = image_urls[1]
+        elif len(image_urls) >= 3: mapping[1], mapping[2] = image_urls[1], image_urls[2]
 
-        for slot_idx, url in mapping.items():
-            if slot_idx in layout["slots"]:
-                slot = layout["slots"][slot_idx]
-                resp = requests.get(url, timeout=10)
-                img = Image.open(BytesIO(resp.content)).convert("RGBA")
-                fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                canvas.paste(fitted, (slot['x'], slot['y']), fitted)
+        for idx, url in mapping.items():
+            if idx in layout["slots"]:
+                s = layout["slots"][idx]
+                img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
+                canvas.paste(ImageOps.fit(img, (s['w'], s['h']), Image.Resampling.LANCZOS), (s['x'], s['y']))
 
-        # LAYER 3: SQUIGGLY
         if layout["squiggly"] and os.path.exists(SQUIGGLY_PATH):
-            squiggly = Image.open(SQUIGGLY_PATH).convert("RGBA")
-            canvas.paste(squiggly, (layout["squiggly"]["x"], layout["squiggly"]["y"]), squiggly)
+            sq = Image.open(SQUIGGLY_PATH).convert("RGBA")
+            canvas.paste(sq, (layout["squiggly"]["x"], layout["squiggly"]["y"]), sq)
 
-        # LAYER 4: PRICE BOX
-        box_path = PRICE_BOX_SALE if is_sale else PRICE_BOX_NORMAL
-        if os.path.exists(box_path) and "x" in layout["price"]:
-            p_box = Image.open(box_path).convert("RGBA")
-            canvas.paste(p_box, (layout["price"]["x"], layout["price"]["y"]), p_box)
-
-        # LAYER 5: PRICE TEXT
-        if "center_x" in layout["price"]:
+        box_p = PRICE_BOX_SALE if is_sale else PRICE_BOX_NORMAL
+        if os.path.exists(box_p) and "x" in layout["price"]:
+            box = Image.open(box_p).convert("RGBA")
+            canvas.paste(box, (layout["price"]["x"], layout["price"]["y"]), box)
             draw = ImageDraw.Draw(canvas)
-            font = ImageFont.truetype(FONT_PATH, 55)
+            font = ImageFont.truetype(FONT_PATH, cfg['font_size'])
             p = layout["price"]
             _, _, w, h = draw.textbbox((0, 0), price_text, font=font)
-            draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=text_color, font=font)
+            draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=color, font=font)
 
-        canvas.convert("RGB").save(output_path, "JPEG", quality=92)
+        canvas.convert("RGB").save(out_path, "JPEG", quality=92)
+        return out_name
     except Exception as e:
-        print(f"Error processing {product_id}: {e}")
+        print(f"Error {fmt_key} for {product_id}: {e}")
+        return None
+
+# --- 4. MAIN ---
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
     
-    layout = get_layout_from_svg(SVG_LAYOUT_PATH)
-    if not layout: return
+    layouts = {k: get_layout(v['svg']) for k, v in FORMATS.items()}
+    if not layouts["square"] or not layouts["story"]:
+        print("Missing SVG layouts. Check assets folder."); return
 
-    for code, config in COUNTRY_CONFIGS.items():
-        print(f"Processing Feed: {code}...")
-        resp = requests.get(config['url'])
+    for code, cfg in COUNTRY_CONFIGS.items():
+        print(f"Processing {code}...")
+        resp = requests.get(cfg['url'])
         path = os.path.join(TEMP_DOWNLOAD_DIR, f"{code}.xml")
         with open(path, 'wb') as f: f.write(resp.content)
         
         root = ET.parse(path).getroot()
-        products = []
-        for item in list(root.iter('item'))[:LIMIT_PER_COUNTRY]:
+        channel = root.find('channel')
+        items = channel.findall('item') if channel is not None else root.findall('item')
+        
+        new_items = []
+        for item in items[:LIMIT_PER_COUNTRY]:
             pid = item.find('g:id', NAMESPACES).text.strip()
-            
-            # Collect images
-            image_urls = [item.find('g:image_link', NAMESPACES).text.strip()]
+            imgs = [item.find('g:image_link', NAMESPACES).text.strip()]
             for add in item.findall('g:additional_image_link', NAMESPACES)[:2]:
-                image_urls.append(add.text.strip())
+                imgs.append(add.text.strip())
 
-            # Price logic
             sale_node = item.find('g:sale_price', NAMESPACES)
             is_sale = sale_node is not None
-            display_price = sale_node.text if is_sale else item.find('g:price', NAMESPACES).text
-            clean_price = display_price.split()[0].replace(".00", "") + "€"
-            
-            d_hash = hashlib.sha1(f"{pid}{clean_price}".encode()).hexdigest()[:8]
-            products.append((image_urls, clean_price, pid, is_sale, d_hash, layout))
+            raw_p = sale_node.text if is_sale else item.find('g:price', NAMESPACES).text
+            price = raw_p.split()[0].replace(".00", "") + "€"
+            d_hash = hashlib.sha1(f"{pid}{price}".encode()).hexdigest()[:8]
 
-        with ThreadPoolExecutor(max_workers=5) as exe:
-            for p in products: exe.submit(create_ballzy_ad, *p)
+            # Generate Images
+            sq_file = create_image(imgs, price, pid, is_sale, d_hash, layouts["square"], "square")
+            st_file = create_image(imgs, price, pid, is_sale, d_hash, layouts["story"], "story")
+
+            if sq_file and st_file:
+                item.find('g:image_link', NAMESPACES).text = f"{BASE_PUBLIC_URL}/{sq_file}"
+                # Prepend the Story image as the first additional image for Meta/Google
+                new_story_tag = ET.Element('{http://base.google.com/ns/1.0}additional_image_link')
+                new_story_tag.text = f"{BASE_PUBLIC_URL}/{st_file}"
+                item.insert(2, new_story_tag) 
+
+        # Save the optimized Dual-Image Feed
+        feed_output = os.path.join(BASE_DIR, f"ballzy_dual_feed_{code}.xml")
+        ET.ElementTree(root).write(feed_output, encoding='utf-8', xml_declaration=True)
+        print(f"Saved: {feed_output}")
 
 if __name__ == "__main__":
     main()
