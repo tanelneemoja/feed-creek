@@ -25,7 +25,7 @@ PRICE_BOX_NORMAL = os.path.join(ASSETS_DIR, "price_box_normal.png")
 PRICE_BOX_SALE = os.path.join(ASSETS_DIR, "price_box_sale.png")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
 
-MAX_PRODUCTS_TO_GENERATE = 100
+MAX_PRODUCTS_TO_GENERATE = 50
 NORMAL_PRICE_COLOR = "#1267F3"
 SALE_PRICE_COLOR = "#cc02d2"
 NAMESPACES = {'g': 'http://base.google.com/ns/1.0'}
@@ -57,38 +57,25 @@ def extract_best_coords(elem):
     return None
 
 def get_layout_from_svg(svg_path):
-    if not os.path.exists(svg_path):
-        print(f"!!! ERROR: File not found: {svg_path}")
-        return None
-    
-    print(f"--- Parsing Layout: {os.path.basename(svg_path)} ---")
+    if not os.path.exists(svg_path): return None
     tree = ET.parse(svg_path); root = tree.getroot()
     layout = {"slots": {}, "price": {}, "squiggly": None}
-    
     for elem in root.iter():
         eid = (elem.get('id') or '').lower()
-        if eid:
-            print(f"  Found ID: {eid}") # This helps us see what Figma named things
-        
+        # Correct Slot IDs: 0 (Top Left), 1 (Right), 2 (Bottom Left)
         for idx in range(3):
             if f'slot_{idx}' in eid:
                 c = extract_best_coords(elem)
                 if c: layout["slots"][idx] = {"x": c[0], "y": c[1], "w": c[2], "h": c[3]}
-        
-        # Aggressive squiggly check
         if 'squiggly' in eid:
             c = extract_best_coords(elem) or next((extract_best_coords(ch) for ch in elem.iter() if extract_best_coords(ch)), None)
-            if c: 
-                layout["squiggly"] = {"x": c[0], "y": c[1]}
-                print(f"  >> SUCCESS: Squiggly localized at {c[0]}, {c[1]}")
-
+            if c: layout["squiggly"] = {"x": c[0], "y": c[1]}
         if 'price_border' in eid:
             c = extract_best_coords(elem)
             if c: layout["price"]["x"], layout["price"]["y"] = c[0], c[1]
         if 'price_target' in eid:
             c = extract_best_coords(elem)
             if c: layout["price"]["center_x"], layout["price"]["center_y"] = c[0]+(c[2]/2), c[1]+(c[3]/2)
-            
     return layout
 
 # --- 3. AD GENERATION ---
@@ -102,22 +89,31 @@ def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layou
         canvas = Image.new("RGBA", template.size, (255, 255, 255, 255))
         canvas.paste(template, (0, 0), template)
 
-        # 1. Product Images
+        # Paste Images
         mapping = {i: image_urls[i] for i in range(min(len(image_urls), 3))}
         for idx, url in mapping.items():
             if idx in layout["slots"]:
                 slot = layout["slots"][idx]
                 img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
-                # ImageOps.fit ensures the image stays in the SVG slot position
-                fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
-                canvas.paste(fitted, (slot['x'], slot['y']), fitted)
+                
+                if fmt_key == "story":
+                    # STORY: "Contain" logic to fix zoom issues on slot_0, slot_1, slot_2
+                    img.thumbnail((slot['w'], slot['h']), Image.Resampling.LANCZOS)
+                    # Center the shoe inside the slot box
+                    offset_x = slot['x'] + (slot['w'] - img.width) // 2
+                    offset_y = slot['y'] + (slot['h'] - img.height) // 2
+                    canvas.paste(img, (offset_x, offset_y), img)
+                else:
+                    # SQUARE: "Fill/Fit" logic
+                    fitted = ImageOps.fit(img, (slot['w'], slot['h']), Image.Resampling.LANCZOS)
+                    canvas.paste(fitted, (slot['x'], slot['y']), fitted)
 
-        # 2. Squiggly (Pasted AFTER images)
+        # Paste Squiggly Overlay
         if layout.get("squiggly") and os.path.exists(SQUIGGLY_PATH):
             squig = Image.open(SQUIGGLY_PATH).convert("RGBA")
             canvas.paste(squig, (layout["squiggly"]["x"], layout["squiggly"]["y"]), squig)
 
-        # 3. Price
+        # Draw Price Box and Price Text
         box_p = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
         if "x" in layout["price"] and os.path.exists(box_p):
             box = Image.open(box_p).convert("RGBA")
@@ -128,7 +124,7 @@ def create_ballzy_ad(image_urls, price_text, product_id, color, data_hash, layou
             draw.text((p["center_x"] - w/2, p["center_y"] - h/2), price_text, fill=color, font=font)
 
         canvas.convert("RGB").save(out_path, "JPEG", quality=92)
-    except Exception as e: pass
+    except Exception as e: print(f"Error {out_name}: {e}")
 
 # --- 4. FEED GENERATORS ---
 
