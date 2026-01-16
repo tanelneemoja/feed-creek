@@ -14,7 +14,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "generated_ads")
 TEMP_DOWNLOAD_DIR = os.path.join(BASE_DIR, "temp_xml_feeds")
 
 # Replace this with your actual GitHub Pages or CDN base URL
-BASE_PUBLIC_URL = "https://yourusername.github.io/feed-creek/generated_ads"
+BASE_PUBLIC_URL = "https://tanelneemoja.github.io/feed-creek/generated_ads"
 
 FORMATS = {
     "square": {
