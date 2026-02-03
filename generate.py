@@ -6,7 +6,7 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
-
+ 
 # --- 1. CONFIGURATION ---
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_ads")
