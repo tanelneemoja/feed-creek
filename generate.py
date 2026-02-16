@@ -7,111 +7,100 @@ import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-# --- 1. CONFIGURATION ---
+# --- CONFIG ---
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_ads")
-TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_xml")
-
-# Single Format: Square
 SVG_NAME = "ballzy_layout.svg"
 TEMPLATE_NAME = "ballzy_template.png"
-FONT_SIZE = 55
-
 SQUIGGLY_PATH = os.path.join(ASSETS_DIR, "squiggly.png")
+FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
+# Price boxes and colors from your setup
 PRICE_BOX_NORMAL = os.path.join(ASSETS_DIR, "price_box_normal.png")
 PRICE_BOX_SALE = os.path.join(ASSETS_DIR, "price_box_sale.png")
-FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "poppins.medium.ttf")
-
 SALE_PRICE_COLOR = "#cc02d2"
 NORMAL_PRICE_COLOR = "#1267F3"
-NAMESPACES = {'g': 'http://base.google.com/ns/1.0'}
-
-COUNTRY_CONFIGS = {
-    "EE": {"url": "https://backend.ballzy.eu/et/amfeed/feed/download?id=102&file=cropink_et.xml", "currency": "€"},
-    "LV": {"url": "https://backend.ballzy.eu/lv/amfeed/feed/download?id=104&file=cropink_lv.xml", "currency": "€"},
-    "LT": {"url": "https://backend.ballzy.eu/lt/amfeed/feed/download?id=105&file=cropink_lt.xml", "currency": "€"},
-    "FI": {"url": "https://backend.ballzy.eu/fi/amfeed/feed/download?id=103&file=cropink_fi.xml", "currency": "€"}
-}
-
-# --- 2. COORDINATE PARSER ---
 
 def get_layout_from_svg(svg_path):
-    if not os.path.exists(svg_path): return None
     tree = ET.parse(svg_path)
     root = tree.getroot()
     layout = {"slots": {}, "price": {}, "squiggly": None}
 
-    # Find IDs regardless of nesting
     for node in root.iter():
         eid = (node.get('id') or '').lower()
         if not eid: continue
 
-        # Standard Rect/Group attributes
-        x, y = float(node.get('x', 0)), float(node.get('y', 0))
-        w, h = float(node.get('width', 0)), float(node.get('height', 0))
+        # 1. Try to get direct X/Y/W/H
+        x = float(node.get('x', 0))
+        y = float(node.get('y', 0))
+        w = float(node.get('width', 0))
+        h = float(node.get('height', 0))
 
-        # Handle Path-based IDs (Squiggly)
-        if 'squiggly' in eid or (w == 0 and node.get('d')):
-            nums = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", node.get('d', ''))]
+        # 2. If it's a PATH (like your Squiggly), extract bounds from 'd'
+        d_attr = node.get('d', '')
+        if d_attr:
+            nums = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", d_attr)]
             if nums:
                 xs, ys = nums[0::2], nums[1::2]
-                x, y, w, h = min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)
+                # If the node had no x/y, use the path's minimums
+                if x == 0: x = min(xs)
+                if y == 0: y = min(ys)
+                if w == 0: w = max(xs) - min(xs)
+                if h == 0: h = max(ys) - min(ys)
 
-        if 'squiggly' in eid:
-            layout["squiggly"] = {"x": int(x), "y": int(y)}
+        # 3. Assign by ID
+        if 'slot_' in eid:
+            idx = int(re.search(r'slot_(\d+)', eid).group(1))
+            layout["slots"][idx] = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+        elif 'squiggly' in eid:
+            # For the squiggly, we use the first valid path position found inside the group
+            if layout["squiggly"] is None or x > 0:
+                layout["squiggly"] = {"x": int(x), "y": int(y)}
         elif 'price_border' in eid:
             layout["price"]["x"], layout["price"]["y"] = int(x), int(y)
         elif 'price_target' in eid:
             layout["price"]["center_x"] = int(x + (w / 2))
             layout["price"]["center_y"] = int(y + (h / 2))
-        elif 'slot_' in eid:
-            match = re.search(r'slot_(\d+)', eid)
-            if match:
-                idx = int(match.group(1))
-                layout["slots"][idx] = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
-    return layout
 
-# --- 3. GENERATION ENGINE ---
+    return layout
 
 def create_ad(image_urls, price_text, product_id, color, data_hash, layout):
     out_path = os.path.join(OUTPUT_DIR, f"ad_{product_id}_{data_hash}_sq.jpg")
-    
     try:
         template = Image.open(os.path.join(ASSETS_DIR, TEMPLATE_NAME)).convert("RGBA")
-        canvas = Image.new("RGBA", template.size, (255, 255, 255, 255))
+        canvas = Image.new("RGBA", (1200, 1200), (255, 255, 255, 255))
         
-        # 1. Shoes (Background)
+        # Layer 0: Products
         for idx, url in enumerate(image_urls[:3]):
             if idx in layout["slots"]:
                 s = layout["slots"][idx]
                 img = Image.open(BytesIO(requests.get(url).content)).convert("RGBA")
-                # Square looks best when shoes fill the slot area (Fit)
+                # Ensure image fills the slot exactly
                 fitted = ImageOps.fit(img, (s['w'], s['h']), Image.Resampling.LANCZOS)
                 canvas.paste(fitted, (s['x'], s['y']), fitted)
 
-        # 2. Main Frame
+        # Layer 1: Template Frame
         canvas.paste(template, (0, 0), template)
 
-        # 3. Squiggly (On top of frame)
+        # Layer 2: Squiggly (Pasted at the calculated Path coordinates)
         if layout["squiggly"] and os.path.exists(SQUIGGLY_PATH):
             sq = Image.open(SQUIGGLY_PATH).convert("RGBA")
             canvas.paste(sq, (layout["squiggly"]["x"], layout["squiggly"]["y"]), sq)
 
-        # 4. Price
+        # Layer 3: Price
         box_img = PRICE_BOX_SALE if color == SALE_PRICE_COLOR else PRICE_BOX_NORMAL
-        if "x" in layout["price"] and os.path.exists(box_img):
+        if "x" in layout["price"]:
             box = Image.open(box_img).convert("RGBA")
             canvas.paste(box, (layout["price"]["x"], layout["price"]["y"]), box)
-            
             draw = ImageDraw.Draw(canvas)
-            font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+            font = ImageFont.truetype(FONT_PATH, 55)
             tw, th = draw.textbbox((0, 0), price_text, font=font)[2:]
             draw.text((layout["price"]["center_x"] - tw/2, layout["price"]["center_y"] - th/2), 
                       price_text, fill=color, font=font)
 
         canvas.convert("RGB").save(out_path, "JPEG", quality=95)
+        print(f"Done: {product_id}")
     except Exception as e:
-        print(f"Error on {product_id}: {e}")
+        print(f"Failed {product_id}: {e}")
 
 # --- 4. MAIN ---
 
